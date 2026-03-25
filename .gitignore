@@ -1,0 +1,10 @@
+models/
+embeddings/
+data/
+__pycache__/
+.env
+.venv/
+*.pdf
+*.index
+*.pkl
+debug_*.txt

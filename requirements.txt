@@ -1,0 +1,12 @@
+streamlit
+faiss-cpu
+sentence-transformers
+pdfplumber
+numpy
+pillow
+pandas
+openpyxl
+pyspark
+SQLAlchemy
+pymysql
+python-dotenv

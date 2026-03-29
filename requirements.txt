@@ -1,4 +1,5 @@
 streamlit
+llama-cpp-python
 faiss-cpu
 sentence-transformers
 pdfplumber

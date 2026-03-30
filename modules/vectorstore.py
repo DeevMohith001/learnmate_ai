@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import pickle
+import json
 
 import numpy as np
 
@@ -42,7 +42,7 @@ def _get_embed_model():
 
 
 def _index_paths(index_path: str) -> tuple[Path, Path]:
-    return Path(f"{index_path}.index"), Path(f"{index_path}_texts.pkl")
+    return Path(f"{index_path}.index"), Path(f"{index_path}_texts.json")
 
 
 def _token_overlap_score(query: str, text: str) -> int:
@@ -53,12 +53,13 @@ def _token_overlap_score(query: str, text: str) -> int:
     return len(query_tokens & text_tokens)
 
 
-def build_vectorstore(texts: list, index_path: str = "embeddings/vectordb"):
+def build_vectorstore(texts: list[str], index_path: str = "embeddings/vectordb"):
+    """Persist chunk text and optional embeddings for retrieval."""
     ensure_directory("embeddings")
     index_file, text_file = _index_paths(index_path)
 
-    with text_file.open("wb") as file:
-        pickle.dump(texts, file)
+    with text_file.open("w", encoding="utf-8") as file:
+        json.dump(list(texts), file, ensure_ascii=False, indent=2)
 
     embed_model = _get_embed_model()
     if faiss is None or embed_model is None or not texts:
@@ -70,13 +71,19 @@ def build_vectorstore(texts: list, index_path: str = "embeddings/vectordb"):
     faiss.write_index(index, str(index_file))
 
 
-def retrieve_relevant_chunks(query: str, k=3, index_path: str = "embeddings/vectordb", score_threshold: float = 1.0):
+def retrieve_relevant_chunks(
+    query: str,
+    k: int = 3,
+    index_path: str = "embeddings/vectordb",
+    score_threshold: float = 25.0,
+):
+    """Return the best matching chunks for the supplied query."""
     index_file, text_file = _index_paths(index_path)
     if not text_file.exists():
         return []
 
-    with text_file.open("rb") as file:
-        texts = pickle.load(file)
+    with text_file.open("r", encoding="utf-8") as file:
+        texts = json.load(file)
 
     embed_model = _get_embed_model()
     if faiss is not None and embed_model is not None and index_file.exists():

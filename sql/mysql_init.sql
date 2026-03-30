@@ -1,6 +1,14 @@
 CREATE DATABASE IF NOT EXISTS learnmate_ai;
 USE learnmate_ai;
 
+CREATE TABLE IF NOT EXISTS users (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at DATETIME NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     dataset_name VARCHAR(255) NOT NULL,

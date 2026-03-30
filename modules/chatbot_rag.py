@@ -1,14 +1,18 @@
 # modules/chatbot_rag.py
+from modules.llama_model import generate_llm_response, llm_is_available
 from modules.vectorstore import retrieve_relevant_chunks
-from modules.llama_model import generate_llm_response
+
 
 def chatbot_respond(question: str) -> str:
     context_chunks = retrieve_relevant_chunks(question, k=3, score_threshold=1.0)
 
     if not context_chunks:
-        return "❌ Sorry, I couldn't find any relevant information related to your question in the uploaded document."
+        return "Sorry, I couldn't find relevant information in the uploaded document."
 
     context = "\n".join(context_chunks)
+
+    if not llm_is_available():
+        return f"Based on the uploaded material, the most relevant passage is:\n\n{context_chunks[0][:600]}"
 
     prompt = f"""
 Use the following CONTEXT to answer the question. Only use the context provided. Do not guess or add extra information.

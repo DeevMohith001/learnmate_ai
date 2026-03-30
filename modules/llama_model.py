@@ -1,18 +1,73 @@
-from llama_cpp import Llama
-import os
+from __future__ import annotations
 
-MODEL_PATH = os.path.join("models", "mistral-7b.Q4_K_M.gguf")
+from pathlib import Path
+from typing import Optional
 
-# ✅ Defining the model loader globally
-llm = Llama(
-    model_path=MODEL_PATH,
-    n_ctx=4096,
-    n_threads=8,
-    n_gpu_layers=20,
-    verbose=False
-)
+from learnmate_ai.config import get_config
 
-# ✅ This is the callable function
+try:
+    from llama_cpp import Llama
+except Exception:
+    Llama = None
+
+
+_llm_instance = None
+_llm_load_error: Optional[str] = None
+
+
+def get_model_path() -> Path:
+    return Path(get_config().model_path)
+
+
+def load_llm():
+    global _llm_instance, _llm_load_error
+
+    if _llm_instance is not None:
+        return _llm_instance
+
+    if Llama is None:
+        _llm_load_error = "llama-cpp-python is not installed in the active environment."
+        return None
+
+    model_path = get_model_path()
+    if not model_path.exists():
+        _llm_load_error = f"Model file not found: {model_path}"
+        return None
+
+    try:
+        _llm_instance = Llama(
+            model_path=str(model_path),
+            n_ctx=4096,
+            n_threads=8,
+            n_gpu_layers=20,
+            verbose=False,
+        )
+        _llm_load_error = None
+        return _llm_instance
+    except Exception as exc:
+        _llm_load_error = str(exc)
+        return None
+
+
+def llm_is_available() -> bool:
+    return load_llm() is not None
+
+
+def get_llm_status() -> dict[str, str | bool]:
+    model_path = get_model_path()
+    return {
+        "llama_cpp_available": Llama is not None,
+        "model_path": str(model_path),
+        "model_exists": model_path.exists(),
+        "ready": llm_is_available(),
+        "error": _llm_load_error or "",
+    }
+
+
 def generate_llm_response(prompt: str, max_tokens: int = 512, temperature: float = 0.7) -> str:
+    llm = load_llm()
+    if llm is None:
+        raise RuntimeError(_llm_load_error or "Local LLM is unavailable.")
+
     output = llm(prompt=prompt, max_tokens=max_tokens, temperature=temperature)
     return output["choices"][0]["text"].strip()

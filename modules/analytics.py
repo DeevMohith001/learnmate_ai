@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from modules.llama_model import generate_llm_response
+from modules.llama_model import generate_llm_response, llm_is_available
 from modules.utils import clean_token
 
 
@@ -144,6 +144,19 @@ def text_length_metrics(text: str) -> dict[str, int | float]:
 
 
 def generate_analytics_insight(profile: dict[str, Any], numeric_table: pd.DataFrame) -> str:
+    if not llm_is_available():
+        insights = [
+            f"- Dataset size: {profile['rows']} rows x {profile['columns']} columns.",
+            f"- Missing cells: {profile['missing_cells']}; duplicate rows: {profile['duplicate_rows']}.",
+        ]
+        if not numeric_table.empty:
+            first_metric = numeric_table.index[0]
+            metric_row = numeric_table.loc[first_metric]
+            insights.append(
+                f"- Numeric highlight: `{first_metric}` has mean {round(float(metric_row['mean']), 2)} and median {round(float(metric_row['median']), 2)}."
+            )
+        return "\n".join(insights)
+
     compact_table = numeric_table.head(5).round(2).to_dict(orient="index") if not numeric_table.empty else {}
     prompt = (
         "You are a big data analytics assistant. "
@@ -158,6 +171,17 @@ def generate_analytics_insight(profile: dict[str, Any], numeric_table: pd.DataFr
 
 
 def summarize_pipeline_report(report: dict[str, Any]) -> str:
+    if not llm_is_available():
+        quality_score = report.get("quality_score", 0)
+        records_processed = report.get("records_processed", 0)
+        status = report.get("status", "unknown")
+        next_action = "Persist the report to MySQL." if status == "completed" else "Review the pipeline logs."
+        return (
+            f"Pipeline status: {status}.\n\n"
+            f"Records processed: {records_processed}. Quality score: {quality_score}/100.\n\n"
+            f"Next action: {next_action}"
+        )
+
     prompt = (
         "You are an AI data engineer. Summarize this big data pipeline report in a short business-friendly format. "
         "Mention data quality, processing status, and next action.\n\n"

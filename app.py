@@ -153,11 +153,11 @@ with tab4:
         top_metrics[3].metric("Duplicate Rows", profile["duplicate_rows"])
 
         st.markdown(f"### Dataset Preview: `{st.session_state.dataset_name}`")
-        st.dataframe(df.head(20), use_container_width=True)
+        st.dataframe(df.head(20), width="stretch")
 
         if not numeric_table.empty:
             st.markdown("### Numeric Summary")
-            st.dataframe(numeric_table.round(2), use_container_width=True)
+            st.dataframe(numeric_table.round(2), width="stretch")
 
         categorical_columns = profile["categorical_columns"]
         numeric_columns = profile["numeric_columns"]
@@ -175,12 +175,12 @@ with tab4:
             aggregation = config_cols[2].selectbox("Aggregation", ["sum", "mean", "max", "min", "count"])
             aggregated_df = analytics.aggregate_metrics(df, group_column, metric_column, aggregation)
             st.markdown("### Aggregated Metrics")
-            st.dataframe(aggregated_df.head(20), use_container_width=True)
+            st.dataframe(aggregated_df.head(20), width="stretch")
 
         correlation_df = analytics.correlation_matrix(df)
         if not correlation_df.empty:
             st.markdown("### Correlation Matrix")
-            st.dataframe(correlation_df.round(2), use_container_width=True)
+            st.dataframe(correlation_df.round(2), width="stretch")
 
         if numeric_columns:
             anomaly_column = st.selectbox("Anomaly detection column", numeric_columns)
@@ -189,7 +189,7 @@ with tab4:
             if anomalies.empty:
                 st.success("No anomalies found with the default threshold.")
             else:
-                st.dataframe(anomalies.head(20), use_container_width=True)
+                st.dataframe(anomalies.head(20), width="stretch")
 
         inferred_date_column, dated_df = analytics.infer_time_series(df)
         if inferred_date_column and numeric_columns:
@@ -217,7 +217,7 @@ with tab4:
             metric_columns[idx].metric(label.replace("_", " ").title(), value)
 
         st.markdown("### Top Terms in Document")
-        st.dataframe(frequency_df, use_container_width=True)
+        st.dataframe(frequency_df, width="stretch")
         st.caption("Upload a CSV, JSON, or XLSX file to unlock full structured analytics.")
 
     else:

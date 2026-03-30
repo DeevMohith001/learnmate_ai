@@ -22,20 +22,36 @@ STOP_WORDS = {
 
 
 def load_structured_data(uploaded_file) -> pd.DataFrame:
+    if uploaded_file is None:
+        raise ValueError("No file was uploaded.")
+    if not getattr(uploaded_file, "name", ""):
+        raise ValueError("Uploaded file is missing a filename.")
+
     suffix = uploaded_file.name.lower()
     file_bytes = uploaded_file.getvalue()
+    if not file_bytes:
+        raise ValueError("The uploaded file is empty.")
 
     if suffix.endswith(".csv"):
-        return pd.read_csv(BytesIO(file_bytes))
-    if suffix.endswith(".json"):
-        return pd.read_json(BytesIO(file_bytes))
-    if suffix.endswith(".xlsx"):
-        return pd.read_excel(BytesIO(file_bytes))
+        df = pd.read_csv(BytesIO(file_bytes))
+    elif suffix.endswith(".json"):
+        df = pd.read_json(BytesIO(file_bytes))
+    elif suffix.endswith(".xlsx"):
+        df = pd.read_excel(BytesIO(file_bytes))
+    else:
+        raise ValueError("Unsupported file type. Please upload CSV, JSON, or XLSX.")
 
-    raise ValueError("Unsupported file type. Please upload CSV, JSON, or XLSX.")
+    if df.empty:
+        raise ValueError("The uploaded dataset contains no rows.")
+    if df.columns.empty:
+        raise ValueError("The uploaded dataset contains no columns.")
+    return df
 
 
 def profile_dataframe(df: pd.DataFrame) -> dict[str, Any]:
+    if df is None or df.empty:
+        raise ValueError("Cannot profile an empty dataset.")
+
     numeric_df = df.select_dtypes(include=[np.number])
 
     return {
@@ -72,6 +88,13 @@ def aggregate_metrics(
     metric_column: str,
     aggregation: str,
 ) -> pd.DataFrame:
+    if group_column not in df.columns:
+        raise ValueError(f"Group column not found: {group_column}")
+    if aggregation not in {"sum", "mean", "max", "min", "count"}:
+        raise ValueError(f"Unsupported aggregation: {aggregation}")
+    if metric_column not in df.columns:
+        raise ValueError(f"Metric column not found: {metric_column}")
+
     grouped = df.groupby(group_column, dropna=False)[metric_column].agg(aggregation).reset_index()
     return grouped.sort_values(metric_column, ascending=False)
 
@@ -84,6 +107,11 @@ def correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def detect_anomalies(df: pd.DataFrame, column: str, z_threshold: float = 3.0) -> pd.DataFrame:
+    if column not in df.columns:
+        raise ValueError(f"Column not found: {column}")
+    if z_threshold <= 0:
+        raise ValueError("z_threshold must be greater than 0.")
+
     series = pd.to_numeric(df[column], errors="coerce")
     valid = series.dropna()
     if valid.empty or valid.std() == 0:
@@ -97,6 +125,9 @@ def detect_anomalies(df: pd.DataFrame, column: str, z_threshold: float = 3.0) ->
 
 
 def infer_time_series(df: pd.DataFrame) -> tuple[str | None, pd.DataFrame]:
+    if df is None or df.empty:
+        return None, pd.DataFrame()
+
     for column in df.columns:
         parsed = pd.to_datetime(df[column], errors="coerce")
         if parsed.notna().sum() >= max(3, len(df) // 3):
@@ -107,6 +138,11 @@ def infer_time_series(df: pd.DataFrame) -> tuple[str | None, pd.DataFrame]:
 
 
 def build_time_series(df: pd.DataFrame, date_column: str, metric_column: str) -> pd.DataFrame:
+    if date_column not in df.columns:
+        raise ValueError(f"Date column not found: {date_column}")
+    if metric_column not in df.columns:
+        raise ValueError(f"Metric column not found: {metric_column}")
+
     temp_df = df.copy()
     temp_df[date_column] = pd.to_datetime(temp_df[date_column], errors="coerce")
     temp_df = temp_df.dropna(subset=[date_column])

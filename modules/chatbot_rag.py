@@ -4,7 +4,11 @@ from modules.vectorstore import retrieve_relevant_chunks
 
 
 def chatbot_respond(question: str) -> str:
-    context_chunks = retrieve_relevant_chunks(question, k=3, score_threshold=1.0)
+    cleaned_question = question.strip()
+    if not cleaned_question:
+        return "Please enter a question about the uploaded document."
+
+    context_chunks = retrieve_relevant_chunks(cleaned_question, k=3, score_threshold=25.0)
 
     if not context_chunks:
         return "Sorry, I couldn't find relevant information in the uploaded document."
@@ -20,7 +24,7 @@ Use the following CONTEXT to answer the question. Only use the context provided.
 CONTEXT:
 {context}
 
-QUESTION: {question}
+QUESTION: {cleaned_question}
 
 Answer in 2-3 sentences.
 """

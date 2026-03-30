@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -9,9 +10,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from learnmate_ai.config import AppConfig, get_config
 
 
+@lru_cache(maxsize=4)
+def _build_engine(sqlalchemy_uri: str):
+    return create_engine(sqlalchemy_uri, pool_pre_ping=True, pool_recycle=3600)
+
+
 def get_mysql_engine(config: AppConfig | None = None):
     app_config = config or get_config()
-    return create_engine(app_config.sqlalchemy_uri, pool_pre_ping=True)
+    if not app_config.mysql_configured:
+        raise RuntimeError("MySQL is not configured. Set MYSQL_HOST, MYSQL_DATABASE, MYSQL_USER, and MYSQL_PASSWORD.")
+    return _build_engine(app_config.sqlalchemy_uri)
 
 
 def initialize_mysql_schema(config: AppConfig | None = None):
@@ -62,12 +70,19 @@ def initialize_mysql_schema(config: AppConfig | None = None):
 
 def mysql_status(config: AppConfig | None = None) -> dict[str, Any]:
     app_config = config or get_config()
+    if not app_config.mysql_configured:
+        return {
+            "connected": False,
+            "database": app_config.mysql_database,
+            "host": app_config.mysql_host,
+            "error": "MySQL credentials are not configured.",
+        }
     try:
         engine = get_mysql_engine(app_config)
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         return {"connected": True, "database": app_config.mysql_database, "host": app_config.mysql_host}
-    except SQLAlchemyError as exc:
+    except (SQLAlchemyError, RuntimeError) as exc:
         return {"connected": False, "database": app_config.mysql_database, "host": app_config.mysql_host, "error": str(exc)}
 
 

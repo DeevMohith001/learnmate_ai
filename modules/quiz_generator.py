@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 
 from modules.llama_model import generate_llm_response, llm_is_available
@@ -64,9 +66,6 @@ Content:
 """
 
     raw = generate_llm_response(prompt, max_tokens=1500, temperature=0.7)
-
-    with open("debug_quiz_output.txt", "w", encoding="utf-8") as file:
-        file.write(raw)
 
     parsed = parse_quiz_text(raw)
 

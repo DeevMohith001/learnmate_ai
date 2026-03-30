@@ -75,7 +75,7 @@ def retrieve_relevant_chunks(
     query: str,
     k: int = 3,
     index_path: str = "embeddings/vectordb",
-    score_threshold: float = 25.0,
+    score_threshold: float = 2.0,
 ):
     """Return the best matching chunks for the supplied query."""
     index_file, text_file = _index_paths(index_path)

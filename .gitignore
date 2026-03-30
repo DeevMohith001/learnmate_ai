@@ -4,7 +4,13 @@ data/
 __pycache__/
 .env
 .venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/__pycache__/
+*.egg-info/
+*.zip
 *.pdf
 *.index
-*.pkl
 debug_*.txt

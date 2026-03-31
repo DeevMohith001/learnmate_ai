@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from io import BytesIO
 import os
 import re
 from typing import BinaryIO
 
-import pdfplumber
+try:
+    import pdfplumber
+except Exception:
+    pdfplumber = None
 
 
 def ensure_directory(path: str) -> None:
@@ -12,8 +16,17 @@ def ensure_directory(path: str) -> None:
 
 
 def extract_text_from_pdf(uploaded_file: BinaryIO) -> str:
+    if pdfplumber is None:
+        raise ValueError(
+            "PDF support is unavailable because 'pdfplumber' is not installed. "
+            "Install dependencies from requirements.txt to enable PDF uploads."
+        )
     try:
-        with pdfplumber.open(uploaded_file) as pdf:
+        file_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+        if not file_bytes:
+            raise ValueError("The uploaded PDF file is empty.")
+
+        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
             if not pdf.pages:
                 raise ValueError("The uploaded PDF has no pages.")
 

@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+LOCAL_SITE_PACKAGES = PROJECT_ROOT / "venv" / "Lib" / "site-packages"
+if LOCAL_SITE_PACKAGES.exists():
+    local_site_packages_str = str(LOCAL_SITE_PACKAGES)
+    if local_site_packages_str not in sys.path:
+        sys.path.insert(0, local_site_packages_str)
 
 import pandas as pd
 import streamlit as st
@@ -56,18 +64,21 @@ def handle_upload(config) -> None:
 
     filename = uploaded_file.name.lower()
     if filename.endswith((".pdf", ".txt")):
-        if filename.endswith(".pdf"):
-            text = utils.extract_text_from_pdf(uploaded_file)
-        else:
-            text = uploaded_file.read().decode("utf-8")
+        try:
+            if filename.endswith(".pdf"):
+                text = utils.extract_text_from_pdf(uploaded_file)
+            else:
+                text = uploaded_file.getvalue().decode("utf-8")
 
-        with open(DOC_PATH, "w", encoding="utf-8") as file:
-            file.write(text)
+            with open(DOC_PATH, "w", encoding="utf-8") as file:
+                file.write(text)
 
-        chunks = utils.chunk_text(text)
-        if chunks:
-            vectorstore.build_vectorstore(chunks)
-        st.sidebar.success("Document uploaded and prepared.")
+            chunks = utils.chunk_text(text)
+            if chunks:
+                vectorstore.build_vectorstore(chunks)
+            st.sidebar.success("Document uploaded and prepared.")
+        except Exception as exc:
+            st.sidebar.error(f"Could not read document: {exc}")
         return
 
     try:

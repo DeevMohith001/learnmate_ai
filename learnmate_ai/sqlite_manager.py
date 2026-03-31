@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import lru_cache
 import hashlib
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, text
@@ -13,68 +14,77 @@ from learnmate_ai.config import AppConfig, get_config
 
 @lru_cache(maxsize=4)
 def _build_engine(sqlalchemy_uri: str):
-    return create_engine(sqlalchemy_uri, pool_pre_ping=True, pool_recycle=3600)
+    return create_engine(sqlalchemy_uri, future=True)
 
 
-def get_mysql_engine(config: AppConfig | None = None):
+def reset_sqlite_engine(config: AppConfig | None = None):
+    """Dispose the cached SQLite engine for the given config."""
     app_config = config or get_config()
-    if not app_config.mysql_configured:
-        raise RuntimeError("MySQL is not configured. Set MYSQL_HOST, MYSQL_DATABASE, MYSQL_USER, and MYSQL_PASSWORD.")
+    engine = _build_engine(app_config.sqlalchemy_uri)
+    engine.dispose()
+    _build_engine.cache_clear()
+
+
+def get_sqlite_engine(config: AppConfig | None = None):
+    app_config = config or get_config()
+    db_path = Path(app_config.sqlite_db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     return _build_engine(app_config.sqlalchemy_uri)
 
 
-def initialize_mysql_schema(config: AppConfig | None = None):
-    """Create all tables required by the app."""
-    engine = get_mysql_engine(config)
+def initialize_sqlite_schema(config: AppConfig | None = None):
+    """Create all SQLite tables required by the app."""
+    engine = get_sqlite_engine(config)
     statements = [
         """
         CREATE TABLE IF NOT EXISTS users (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            full_name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) NOT NULL UNIQUE,
-            password_hash VARCHAR(255) NOT NULL,
-            created_at DATETIME NOT NULL
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS pipeline_runs (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            dataset_name VARCHAR(255) NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dataset_name TEXT NOT NULL,
             source_path TEXT NOT NULL,
             bronze_path TEXT,
             silver_path TEXT,
             gold_path TEXT,
-            records_processed BIGINT DEFAULT 0,
-            status VARCHAR(50) NOT NULL,
-            quality_score DECIMAL(5,2),
-            created_at DATETIME NOT NULL
+            records_processed INTEGER DEFAULT 0,
+            status TEXT NOT NULL,
+            quality_score REAL,
+            created_at TEXT NOT NULL
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS dataset_profiles (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            run_id BIGINT,
-            column_name VARCHAR(255) NOT NULL,
-            data_type VARCHAR(100),
-            null_count BIGINT DEFAULT 0,
-            distinct_count BIGINT DEFAULT 0,
-            created_at DATETIME NOT NULL,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER,
+            column_name TEXT NOT NULL,
+            data_type TEXT,
+            null_count INTEGER DEFAULT 0,
+            distinct_count INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
             FOREIGN KEY (run_id) REFERENCES pipeline_runs(id)
         )
         """,
         """
         CREATE TABLE IF NOT EXISTS ai_insights (
-            id BIGINT AUTO_INCREMENT PRIMARY KEY,
-            run_id BIGINT,
-            insight_type VARCHAR(100),
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER,
+            insight_type TEXT,
             insight_text TEXT,
-            created_at DATETIME NOT NULL,
+            created_at TEXT NOT NULL,
             FOREIGN KEY (run_id) REFERENCES pipeline_runs(id)
         )
         """,
     ]
 
     with engine.begin() as connection:
+        connection.execute(text("PRAGMA foreign_keys = ON"))
         for statement in statements:
             connection.execute(text(statement))
 
@@ -84,7 +94,7 @@ def _hash_password(password: str) -> str:
 
 
 def register_user(full_name: str, email: str, password: str, config: AppConfig | None = None) -> dict[str, Any]:
-    """Register a user and persist the record to MySQL."""
+    """Register a user and persist the record to SQLite."""
     full_name = full_name.strip()
     email = email.strip().lower()
     password = password.strip()
@@ -96,9 +106,9 @@ def register_user(full_name: str, email: str, password: str, config: AppConfig |
     if len(password) < 6:
         raise ValueError("Password must be at least 6 characters long.")
 
-    initialize_mysql_schema(config)
-    engine = get_mysql_engine(config)
-    created_at = datetime.utcnow()
+    initialize_sqlite_schema(config)
+    engine = get_sqlite_engine(config)
+    created_at = datetime.now(UTC).isoformat(timespec="seconds")
 
     with engine.begin() as connection:
         existing = connection.execute(
@@ -127,8 +137,8 @@ def register_user(full_name: str, email: str, password: str, config: AppConfig |
 
 def list_registered_users(config: AppConfig | None = None) -> list[dict[str, Any]]:
     """Return registered users for display in the UI."""
-    initialize_mysql_schema(config)
-    engine = get_mysql_engine(config)
+    initialize_sqlite_schema(config)
+    engine = get_sqlite_engine(config)
     with engine.connect() as connection:
         rows = connection.execute(
             text(
@@ -142,28 +152,32 @@ def list_registered_users(config: AppConfig | None = None) -> list[dict[str, Any
         return [dict(row._mapping) for row in rows]
 
 
-def mysql_status(config: AppConfig | None = None) -> dict[str, Any]:
+def sqlite_status(config: AppConfig | None = None) -> dict[str, Any]:
     app_config = config or get_config()
-    if not app_config.mysql_configured:
-        return {
-            "connected": False,
-            "database": app_config.mysql_database,
-            "host": app_config.mysql_host,
-            "error": "MySQL credentials are not configured.",
-        }
+    db_path = Path(app_config.sqlite_db_path)
     try:
-        engine = get_mysql_engine(app_config)
+        engine = get_sqlite_engine(app_config)
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
-        return {"connected": True, "database": app_config.mysql_database, "host": app_config.mysql_host}
+        return {
+            "connected": True,
+            "database": str(db_path),
+            "exists": db_path.exists(),
+        }
     except (SQLAlchemyError, RuntimeError) as exc:
-        return {"connected": False, "database": app_config.mysql_database, "host": app_config.mysql_host, "error": str(exc)}
+        return {
+            "connected": False,
+            "database": str(db_path),
+            "exists": db_path.exists(),
+            "error": str(exc),
+        }
 
 
 def persist_pipeline_report(report: dict[str, Any], config: AppConfig | None = None) -> dict[str, Any]:
     """Persist a pipeline report and related details."""
-    engine = get_mysql_engine(config)
-    created_at = datetime.utcnow()
+    initialize_sqlite_schema(config)
+    engine = get_sqlite_engine(config)
+    created_at = datetime.now(UTC).isoformat(timespec="seconds")
 
     with engine.begin() as connection:
         result = connection.execute(

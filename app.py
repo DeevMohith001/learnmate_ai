@@ -7,15 +7,15 @@ import pandas as pd
 import streamlit as st
 
 from learnmate_ai.config import get_config
-from learnmate_ai.mysql_manager import (
-    initialize_mysql_schema,
-    list_registered_users,
-    mysql_status,
-    persist_pipeline_report,
-    register_user,
-)
 from learnmate_ai.pipelines.big_data_pipeline import run_batch_pipeline
 from learnmate_ai.spark_manager import spark_runtime_status
+from learnmate_ai.sqlite_manager import (
+    initialize_sqlite_schema,
+    list_registered_users,
+    persist_pipeline_report,
+    register_user,
+    sqlite_status,
+)
 from learnmate_ai.storage import ensure_data_directories, save_uploaded_file
 from modules import analytics, chatbot_rag, quiz_generator, summarizer, utils, vectorstore
 
@@ -80,27 +80,24 @@ def handle_upload(config) -> None:
 
 
 def render_registration(config) -> None:
-    st.sidebar.markdown("## User Registration")
+    st.sidebar.markdown("## User Signup")
     with st.sidebar.form("register_form", clear_on_submit=True):
         full_name = st.text_input("Full name")
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Register")
+        submitted = st.form_submit_button("Sign Up")
 
     if submitted:
         try:
             result = register_user(full_name, email, password, config)
-            st.sidebar.success(f"Registered user with id {result['user_id']}.")
+            st.sidebar.success(f"User stored in SQLite with id {result['user_id']}.")
         except Exception as exc:
-            st.sidebar.error(f"Registration failed: {exc}")
+            st.sidebar.error(f"Signup failed: {exc}")
 
-    try:
-        st.session_state.registered_users = list_registered_users(config)
-        if st.session_state.registered_users:
-            st.sidebar.markdown("### Registered Users")
-            st.sidebar.dataframe(pd.DataFrame(st.session_state.registered_users), width="stretch")
-    except Exception as exc:
-        st.sidebar.info(f"Database users unavailable: {exc}")
+    st.session_state.registered_users = list_registered_users(config)
+    if st.session_state.registered_users:
+        st.sidebar.markdown("### Registered Users")
+        st.sidebar.dataframe(pd.DataFrame(st.session_state.registered_users), width="stretch")
 
 
 def render_chatbot_sidebar() -> None:
@@ -128,9 +125,7 @@ def render_summarizer_page() -> None:
     mode = st.radio("Type of summary", ["brief", "detailed"], horizontal=True)
     if st.button("Summarize Document"):
         with st.spinner("Summarizing..."):
-            summary = summarizer.summarize_text(doc_content, mode)
-            st.markdown("### Summary")
-            st.markdown(summary)
+            st.markdown(summarizer.summarize_text(doc_content, mode))
 
 
 def render_quiz_page() -> None:
@@ -236,14 +231,11 @@ def render_analytics_page() -> None:
 def render_pipeline_page(config) -> None:
     st.header("Pipeline Ops")
     st.json(spark_runtime_status(config))
-    st.json(mysql_status(config))
+    st.json(sqlite_status(config))
 
-    if st.button("Initialize MySQL Schema"):
-        try:
-            initialize_mysql_schema(config)
-            st.success("MySQL schema initialized.")
-        except Exception as exc:
-            st.error(f"MySQL initialization failed: {exc}")
+    if st.button("Initialize SQLite Schema"):
+        initialize_sqlite_schema(config)
+        st.success("SQLite schema initialized.")
 
     if st.button("Run Spark Pipeline"):
         if not st.session_state.dataset_raw_path:
@@ -257,14 +249,14 @@ def render_pipeline_page(config) -> None:
             except Exception as exc:
                 st.error(f"Spark pipeline failed: {exc}")
 
-    if st.button("Persist Report To MySQL"):
+    if st.button("Persist Report To SQLite"):
         if not st.session_state.pipeline_report:
             st.warning("Run the Spark pipeline first.")
         else:
             try:
-                initialize_mysql_schema(config)
+                initialize_sqlite_schema(config)
                 result = persist_pipeline_report(st.session_state.pipeline_report, config)
-                st.success(f"Pipeline metadata stored in MySQL with run id {result['run_id']}.")
+                st.success(f"Pipeline metadata stored in SQLite with run id {result['run_id']}.")
             except Exception as exc:
                 st.error(f"Could not store metadata: {exc}")
 
@@ -280,7 +272,7 @@ def main() -> None:
     config = ensure_data_directories(get_config())
     init_state()
 
-    st.title("LearnMate AI + Big Data Platform")
+    st.title("LearnMate AI + SQLite Platform")
     handle_upload(config)
     render_registration(config)
     render_chatbot_sidebar()

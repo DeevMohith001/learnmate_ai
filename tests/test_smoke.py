@@ -5,6 +5,14 @@ from pathlib import Path
 import shutil
 import unittest
 
+from learnmate_ai.config import AppConfig
+from learnmate_ai.sqlite_manager import (
+    initialize_sqlite_schema,
+    list_registered_users,
+    register_user,
+    reset_sqlite_engine,
+    sqlite_status,
+)
 from modules import analytics, chatbot_rag, vectorstore
 
 
@@ -18,6 +26,13 @@ class UploadStub:
 
 
 class LearnMateSmokeTests(unittest.TestCase):
+    def tearDown(self):
+        config = AppConfig(sqlite_db_path=Path("tests/.tmp_learnmate.db"))
+        reset_sqlite_engine(config)
+        sqlite_path = Path("tests/.tmp_learnmate.db")
+        if sqlite_path.exists():
+            sqlite_path.unlink(missing_ok=True)
+
     def test_load_structured_data_valid_csv(self):
         upload = UploadStub("sample.csv", b"category,value\nA,1\nB,2\n")
         df = analytics.load_structured_data(upload)
@@ -56,6 +71,16 @@ class LearnMateSmokeTests(unittest.TestCase):
             self.assertIn("python", results[0].lower())
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_sqlite_signup_persists_user(self):
+        config = AppConfig(sqlite_db_path=Path("tests/.tmp_learnmate.db"))
+        initialize_sqlite_schema(config)
+        result = register_user("Test User", "test@example.com", "secret12", config)
+        users = list_registered_users(config)
+        status = sqlite_status(config)
+        self.assertTrue(result["stored"])
+        self.assertTrue(status["connected"])
+        self.assertEqual(users[0]["email"], "test@example.com")
 
 
 if __name__ == "__main__":

@@ -1,18 +1,15 @@
-# LearnMate AI + Big Data Platform
+# LearnMate AI + SQLite Platform
 
-LearnMate is now structured as an **AI + Big Data** project rather than only a local study assistant.
+LearnMate is an AI study assistant plus a local big data workspace.
 
-It still includes the original AI features:
+It includes:
 - document summarization
 - quiz generation
-- RAG-based chatbot for uploaded study material
-
-It now also includes a proper big data foundation:
-- PySpark-based batch pipeline
-- raw, bronze, silver, and gold data lake zones
-- MySQL metadata storage for pipeline runs
+- sidebar chatbot for uploaded study material
+- PySpark-style batch pipeline
+- raw, bronze, silver, and gold data zones
+- SQLite-backed user signup and pipeline metadata
 - analytics dashboards for uploaded datasets
-- AI-generated insight summaries for datasets and pipeline reports
 
 ## Architecture
 
@@ -23,43 +20,24 @@ It now also includes a proper big data foundation:
 - `modules/vectorstore.py`
 - `modules/llama_model.py`
 
-### Big Data Layer
+### Data Layer
 - `learnmate_ai/config.py`
+- `learnmate_ai/sqlite_manager.py`
 - `learnmate_ai/storage.py`
 - `learnmate_ai/spark_manager.py`
 - `learnmate_ai/pipelines/big_data_pipeline.py`
-- `learnmate_ai/mysql_manager.py`
 
-### Data Engineering Zones
-- `data/raw`
-- `data/bronze`
-- `data/silver`
-- `data/gold`
-- `data/reports`
+## SQLite
 
-## Big Data Features Added
-- upload structured datasets in `csv`, `json`, or `xlsx`
-- store raw source files for reproducible ingestion
-- run a Spark ETL pipeline
-- normalize schema and clean duplicates
-- write bronze, silver, and gold outputs
-- compute dataset quality metrics
-- persist pipeline metadata to MySQL
-- review Spark and MySQL runtime status from the UI
+This project now uses SQLite instead of MySQL.
 
-## MySQL Setup
+The database file is stored locally at:
 
-You can start MySQL locally with Docker:
-
-```bash
-docker compose up -d
+```text
+data/learnmate.db
 ```
 
-This uses `docker-compose.yml` and initializes tables from `sql/mysql_init.sql`.
-
-Default services:
-- MySQL: `localhost:3306`
-- phpMyAdmin: `localhost:8080`
+The app creates the schema automatically when needed. User signup records are stored in the `users` table.
 
 ## Environment Configuration
 
@@ -69,14 +47,9 @@ Copy `.env.example` to `.env` and adjust values for your machine:
 MODEL_PATH=models/mistral-7b.Q4_K_M.gguf
 SPARK_APP_NAME=LearnMateBigData
 SPARK_MASTER=local[*]
-MYSQL_HOST=localhost
-MYSQL_PORT=3307
-MYSQL_DATABASE=learnmate_ai
-MYSQL_USER=root
-MYSQL_PASSWORD=root
+SPARK_WAREHOUSE_DIR=data/spark-warehouse
+SQLITE_DB_PATH=data/learnmate.db
 ```
-
-If you want Spark JDBC writes to MySQL later, set `MYSQL_JDBC_JAR` to your MySQL connector JAR path.
 
 ## Install
 
@@ -90,9 +63,11 @@ streamlit run app.py
 You can also run the Spark batch pipeline outside Streamlit:
 
 ```bash
-python scripts/run_big_data_pipeline.py path/to/dataset.csv --persist-mysql
+python scripts/run_big_data_pipeline.py path/to/dataset.csv --persist-sqlite
 ```
 
 ## Notes
-- `csv`, `json`, and `xlsx` files can be uploaded through the UI, with Spark processing centered on the raw-to-bronze-to-silver-to-gold flow.
-- PySpark in local mode still gives the project a real big data structure because the code is organized around distributed-style pipelines and layered storage.
+
+- `csv`, `json`, and `xlsx` files can be uploaded through the UI.
+- user signup details are stored in SQLite and shown in the sidebar user table.
+- pipeline metadata can also be persisted to the same SQLite database file.

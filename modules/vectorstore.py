@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import json
 
@@ -32,13 +33,23 @@ def _get_embed_model():
         _embed_model_error = "sentence-transformers is not installed."
         return None
 
+    local_only = os.getenv("VECTORSTORE_LOCAL_ONLY", "true").lower() == "true"
+
     try:
-        _embed_model = SentenceTransformer("multi-qa-MiniLM-L6-cos-v1", local_files_only=True)
+        _embed_model = SentenceTransformer("multi-qa-MiniLM-L6-cos-v1", local_files_only=local_only)
         _embed_model_error = None
         return _embed_model
     except Exception as exc:
-        _embed_model_error = str(exc)
-        return None
+        if local_only:
+            _embed_model_error = str(exc)
+            return None
+        try:
+            _embed_model = SentenceTransformer("multi-qa-MiniLM-L6-cos-v1", local_files_only=False)
+            _embed_model_error = None
+            return _embed_model
+        except Exception as inner_exc:
+            _embed_model_error = str(inner_exc)
+            return None
 
 
 def _index_paths(index_path: str) -> tuple[Path, Path]:

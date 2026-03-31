@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from learnmate_ai.config import AppConfig, get_config
@@ -21,7 +21,7 @@ def ensure_data_directories(config: AppConfig | None = None) -> AppConfig:
 
 
 def timestamped_name(original_name: str) -> str:
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     return f"{timestamp}_{original_name}"
 
 

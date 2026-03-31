@@ -29,12 +29,13 @@ def _fallback_quiz(content: str, count: int) -> list:
                 unique_options.append(option)
         while len(unique_options) < 4:
             unique_options.append(f"option_{len(unique_options) + 1}")
+        answer_index = unique_options.index(answer_word)
 
         quiz_data.append(
             {
                 "question": f"Fill in the blank: {question_text}",
                 "options": unique_options[:4],
-                "answer": "A",
+                "answer": "ABCD"[answer_index],
             }
         )
 

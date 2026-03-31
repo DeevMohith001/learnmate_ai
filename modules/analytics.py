@@ -103,7 +103,7 @@ def correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
     numeric_df = df.select_dtypes(include=[np.number])
     if numeric_df.shape[1] < 2:
         return pd.DataFrame()
-    return numeric_df.corr(numeric_only=True)
+    return numeric_df.corr()
 
 
 def detect_anomalies(df: pd.DataFrame, column: str, z_threshold: float = 3.0) -> pd.DataFrame:
@@ -211,7 +211,7 @@ def summarize_pipeline_report(report: dict[str, Any]) -> str:
         quality_score = report.get("quality_score", 0)
         records_processed = report.get("records_processed", 0)
         status = report.get("status", "unknown")
-        next_action = "Persist the report to MySQL." if status == "completed" else "Review the pipeline logs."
+        next_action = "Persist the report to SQLite." if status == "completed" else "Review the pipeline logs."
         return (
             f"Pipeline status: {status}.\n\n"
             f"Records processed: {records_processed}. Quality score: {quality_score}/100.\n\n"

@@ -37,7 +37,7 @@ class AppConfig:
 
     @property
     def database_configured(self) -> bool:
-        return True
+        return bool(self.sqlite_db_path and str(self.sqlite_db_path).strip())
 
 
 def get_config() -> AppConfig:

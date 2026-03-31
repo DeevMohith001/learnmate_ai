@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 from typing import Optional
 
 from learnmate_ai.config import get_config
@@ -13,6 +14,7 @@ except Exception:
 
 _llm_instance = None
 _llm_load_error: Optional[str] = None
+_llm_lock = Lock()
 
 
 def get_model_path() -> Path:
@@ -34,19 +36,22 @@ def load_llm():
         _llm_load_error = f"Model file not found: {model_path}"
         return None
 
-    try:
-        _llm_instance = Llama(
-            model_path=str(model_path),
-            n_ctx=4096,
-            n_threads=8,
-            n_gpu_layers=20,
-            verbose=False,
-        )
-        _llm_load_error = None
-        return _llm_instance
-    except Exception as exc:
-        _llm_load_error = str(exc)
-        return None
+    with _llm_lock:
+        if _llm_instance is not None:
+            return _llm_instance
+        try:
+            _llm_instance = Llama(
+                model_path=str(model_path),
+                n_ctx=4096,
+                n_threads=8,
+                n_gpu_layers=20,
+                verbose=False,
+            )
+            _llm_load_error = None
+            return _llm_instance
+        except Exception as exc:
+            _llm_load_error = str(exc)
+            return None
 
 
 def llm_is_available() -> bool:

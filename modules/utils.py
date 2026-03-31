@@ -11,6 +11,9 @@ except Exception:
     pdfplumber = None
 
 
+PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
+
+
 def ensure_directory(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
@@ -31,20 +34,54 @@ def extract_text_from_pdf(uploaded_file: BinaryIO) -> str:
                 raise ValueError("The uploaded PDF has no pages.")
 
             extracted_pages = []
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    extracted_pages.append(page_text)
+            for page_number, page in enumerate(pdf.pages, start=1):
+                page_text = page.extract_text() or ""
+                cleaned = page_text.strip()
+                if cleaned:
+                    extracted_pages.append(f"[Page {page_number}]\n{cleaned}")
 
             if not extracted_pages:
                 raise ValueError("No readable text was found in the uploaded PDF.")
-            return "\n".join(extracted_pages)
+            return "\n\n".join(extracted_pages)
     except Exception as exc:
         raise ValueError(f"Could not extract text from the PDF: {exc}") from exc
 
 
-def chunk_text(text: str, length: int = 1000) -> list[str]:
-    return [text[i:i + length] for i in range(0, len(text), length)]
+def chunk_text(text: str, length: int = 1800, overlap: int = 250) -> list[str]:
+    normalized = text.replace("\r\n", "\n")
+    paragraphs = [part.strip() for part in PARAGRAPH_BREAK.split(normalized) if part.strip()]
+    if not paragraphs:
+        return []
+
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        candidate = paragraph if not current else f"{current}\n\n{paragraph}"
+        if len(candidate) <= length:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+        if len(paragraph) <= length:
+            current = paragraph
+            continue
+
+        start = 0
+        while start < len(paragraph):
+            end = min(start + length, len(paragraph))
+            chunk = paragraph[start:end].strip()
+            if chunk:
+                chunks.append(chunk)
+            if end >= len(paragraph):
+                break
+            start = max(end - overlap, start + 1)
+        current = ""
+
+    if current:
+        chunks.append(current)
+
+    return chunks
 
 
 def clean_token(token: str) -> str:

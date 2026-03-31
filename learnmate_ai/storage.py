@@ -15,6 +15,10 @@ def ensure_data_directories(config: AppConfig | None = None) -> AppConfig:
         app_config.silver_dir,
         app_config.gold_dir,
         app_config.report_dir,
+        app_config.logs_dir,
+        app_config.streaming_input_dir,
+        app_config.streaming_output_dir,
+        app_config.checkpoint_dir,
     ):
         directory.mkdir(parents=True, exist_ok=True)
     return app_config

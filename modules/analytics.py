@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from analytics.analytics import dashboard_metrics, hardest_topics, recent_user_history, top_performing_students, trend_analysis, weak_areas_per_user
 from modules.llama_model import generate_llm_response, llm_is_available
 from modules.utils import clean_token
 
@@ -82,12 +83,7 @@ def top_categories(df: pd.DataFrame, column: str, limit: int = 10) -> pd.DataFra
     return result
 
 
-def aggregate_metrics(
-    df: pd.DataFrame,
-    group_column: str,
-    metric_column: str,
-    aggregation: str,
-) -> pd.DataFrame:
+def aggregate_metrics(df: pd.DataFrame, group_column: str, metric_column: str, aggregation: str) -> pd.DataFrame:
     if group_column not in df.columns:
         raise ValueError(f"Group column not found: {group_column}")
     if aggregation not in {"sum", "mean", "max", "min", "count"}:
@@ -149,11 +145,7 @@ def build_time_series(df: pd.DataFrame, date_column: str, metric_column: str) ->
     if temp_df.empty:
         return pd.DataFrame()
 
-    series = (
-        temp_df.groupby(temp_df[date_column].dt.to_period("M"))[metric_column]
-        .sum()
-        .reset_index()
-    )
+    series = temp_df.groupby(temp_df[date_column].dt.to_period("M"))[metric_column].sum().reset_index()
     series[date_column] = series[date_column].astype(str)
     return series
 
@@ -207,20 +199,45 @@ def generate_analytics_insight(profile: dict[str, Any], numeric_table: pd.DataFr
 
 
 def summarize_pipeline_report(report: dict[str, Any]) -> str:
+    preview = report.get("topic_metrics_preview", [])
+    status = report.get("status", "unknown")
     if not llm_is_available():
-        quality_score = report.get("quality_score", 0)
-        records_processed = report.get("records_processed", 0)
-        status = report.get("status", "unknown")
-        next_action = "Persist the report to SQLite." if status == "completed" else "Review the pipeline logs."
         return (
             f"Pipeline status: {status}.\n\n"
-            f"Records processed: {records_processed}. Quality score: {quality_score}/100.\n\n"
-            f"Next action: {next_action}"
+            f"Records processed: {report.get('records_processed', 0)}.\n\n"
+            f"Top topic rows available: {len(preview)}.\n\n"
+            "Next action: Review the activity and quiz trends in the analytics dashboard."
         )
 
     prompt = (
         "You are an AI data engineer. Summarize this big data pipeline report in a short business-friendly format. "
-        "Mention data quality, processing status, and next action.\n\n"
+        "Mention processing status, top topic performance, and next action.\n\n"
         f"{json.dumps(report, indent=2)}"
     )
     return generate_llm_response(prompt, max_tokens=220, temperature=0.4)
+
+
+def spark_dashboard_metrics(limit: int = 10) -> dict[str, pd.DataFrame]:
+    metrics = dashboard_metrics(limit=limit)
+    return {key: pd.DataFrame(value) for key, value in metrics.items()}
+
+
+def spark_hardest_topics(limit: int = 10) -> pd.DataFrame:
+    return pd.DataFrame(hardest_topics(limit=limit))
+
+
+def spark_weak_areas(limit: int = 20) -> pd.DataFrame:
+    return pd.DataFrame(weak_areas_per_user(limit=limit))
+
+
+def spark_top_students(limit: int = 10) -> pd.DataFrame:
+    return pd.DataFrame(top_performing_students(limit=limit))
+
+
+def spark_trends() -> pd.DataFrame:
+    return pd.DataFrame(trend_analysis())
+
+
+def recent_activity_history(user_id: str) -> dict[str, pd.DataFrame]:
+    history = recent_user_history(user_id)
+    return {key: pd.DataFrame(value) for key, value in history.items()}

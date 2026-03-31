@@ -1,85 +1,104 @@
 from __future__ import annotations
 
+import hashlib
+import random
 import re
 
 from modules.llama_model import generate_llm_response, llm_is_available
 
 
+STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have",
+    "in", "is", "it", "of", "on", "or", "that", "the", "to", "was", "were", "with",
+}
+
+
 def _split_sentences(content: str) -> list[str]:
     parts = re.split(r"(?<=[.!?])\s+", content.strip())
-    return [part.strip() for part in parts if len(part.split()) >= 6]
+    return [part.strip() for part in parts if len(part.split()) >= 8]
+
+
+def _important_words(sentence: str) -> list[str]:
+    cleaned_words = [re.sub(r"[^A-Za-z0-9-]", "", word).strip() for word in sentence.split()]
+    candidates = [word for word in cleaned_words if len(word) > 4 and word.lower() not in STOP_WORDS]
+    return candidates
+
+
+def _sample_sentences(sentences: list[str], count: int) -> list[str]:
+    if len(sentences) <= count:
+        return sentences
+    step = max(1, len(sentences) // count)
+    selected = [sentences[index] for index in range(0, len(sentences), step)]
+    return selected[:count]
 
 
 def _fallback_quiz(content: str, count: int) -> list:
-    sentences = _split_sentences(content)
+    sentences = _sample_sentences(_split_sentences(content), count * 2)
     if not sentences:
         return [{"raw_text": "Not enough content was available to generate quiz questions."}]
 
+    rng = random.Random(int(hashlib.sha256(content.encode("utf-8")).hexdigest(), 16))
+    keyword_pool = []
+    for sentence in sentences:
+        keyword_pool.extend(_important_words(sentence))
+    keyword_pool = list(dict.fromkeys(keyword_pool))
+
     quiz_data = []
     for sentence in sentences[:count]:
-        words = sentence.split()
-        keyword_index = min(max(len(words) // 3, 0), len(words) - 1)
-        answer_word = re.sub(r"[^A-Za-z0-9]", "", words[keyword_index]) or "content"
-        question_text = sentence.replace(words[keyword_index], "_____ ", 1).strip()
-
-        options = [answer_word, "concept", "example", "analysis"]
-        unique_options = []
-        for option in options:
-            if option not in unique_options:
-                unique_options.append(option)
-        while len(unique_options) < 4:
-            unique_options.append(f"option_{len(unique_options) + 1}")
-        answer_index = unique_options.index(answer_word)
-
+        keywords = _important_words(sentence)
+        if not keywords:
+            continue
+        answer_word = max(keywords, key=len)
+        question_text = re.sub(rf"\b{re.escape(answer_word)}\b", "_____", sentence, count=1)
+        distractors = [word for word in keyword_pool if word.lower() != answer_word.lower()]
+        rng.shuffle(distractors)
+        options = [answer_word, *distractors[:3]]
+        while len(options) < 4:
+            options.append(f"Concept{len(options) + 1}")
+        rng.shuffle(options)
+        answer_index = options.index(answer_word)
         quiz_data.append(
             {
-                "question": f"Fill in the blank: {question_text}",
-                "options": unique_options[:4],
+                "question": f"In the document context, complete the statement: {question_text}",
+                "options": options,
                 "answer": "ABCD"[answer_index],
             }
         )
 
-    return quiz_data
+    return quiz_data[:count] if quiz_data else [{"raw_text": "Not enough content was available to generate quiz questions."}]
 
 
 def generate_quiz_questions(content: str, count: int = 5) -> list:
-    """
-    Generate MCQs from content using strict format with example.
-    """
-
+    """Generate medium-hard MCQs from the full document content."""
     if not llm_is_available():
         return _fallback_quiz(content, count)
 
     prompt = f"""
-You are an AI instructor that creates multiple choice questions to help students study.
+You are an AI instructor creating medium-to-hard multiple-choice questions from study material.
+Use the full document, not just the opening section.
+Vary the correct answer positions across A, B, C, and D.
+Avoid trivial wording and avoid making the correct answer always A.
 
-Generate {count} multiple-choice questions from the content below. Follow this format EXACTLY:
+Generate exactly {count} questions in this format:
 
 Q1: [question text]
 A. Option A
 B. Option B
 C. Option C
 D. Option D
-Answer: B
+Answer: C
 
 Content:
 {content}
 """
 
-    raw = generate_llm_response(prompt, max_tokens=1500, temperature=0.7)
-
+    raw = generate_llm_response(prompt, max_tokens=1800, temperature=0.7)
     parsed = parse_quiz_text(raw)
-
-    if len(parsed) == 0:
-        return [{"raw_text": raw}]
-
-    return parsed
+    return parsed if parsed else _fallback_quiz(content, count)
 
 
 def parse_quiz_text(raw_text: str) -> list:
-    """
-    Parse formatted MCQ output into structured list of questions
-    """
+    """Parse formatted MCQ output into a structured question list."""
     pattern = r"Q\d+:\s*(.*?)\s+A\.\s*(.*?)\s+B\.\s*(.*?)\s+C\.\s*(.*?)\s+D\.\s*(.*?)\s+Answer:\s*([ABCD])"
     matches = re.findall(pattern, raw_text, re.DOTALL | re.IGNORECASE)
 

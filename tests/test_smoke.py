@@ -7,17 +7,24 @@ import unittest
 
 from data_ingestion.data_logger import ensure_log_files, load_json_records, log_chat_event, log_quiz_attempt, log_user_activity
 from database.database_manager import (
+    add_chat_message,
     authenticate_user,
+    create_chat_session,
     database_status,
+    get_documents_df,
     get_events_df,
     get_quiz_df,
     get_study_df,
+    get_summary_df,
     get_users_df,
+    get_or_create_document,
     initialize_database_schema,
+    list_chat_messages,
     log_event,
     log_study_session,
     register_user,
     save_quiz_result,
+    store_summary,
 )
 from learnmate_ai.config import AppConfig
 from learnmate_ai.storage import ensure_data_directories
@@ -64,7 +71,9 @@ class LearnMateSmokeTests(unittest.TestCase):
         self.assertEqual(len(df), 2)
 
     def test_blank_chat_question(self):
-        self.assertIn("Please enter", chatbot_rag.chatbot_respond("   "))
+        response = chatbot_rag.chatbot_respond("   ")
+        self.assertIn("Please enter", response["answer"])
+        self.assertEqual(response["confidence"], 0.0)
 
     def test_vectorstore_writes_json_text_file(self):
         temp_dir = self.temp_root / "vectorstore"
@@ -94,20 +103,31 @@ class LearnMateSmokeTests(unittest.TestCase):
     def test_local_database_tracks_user_activity(self):
         user = register_user("Test User", "test@example.com", "password123", self.config)
         auth = authenticate_user("test@example.com", "password123", self.config)
-        log_study_session(user["user_id"], "Document Study", "B Tree", 12, self.config)
-        save_quiz_result(user["user_id"], "Document Study", "B Tree", 4, 5, self.config)
+        document = get_or_create_document(user["user_id"], "demo.pdf", ".pdf", "B Tree", "B Trees and B+ Trees", "en", self.config)
+        log_study_session(user["user_id"], "Document Study", "B Tree", 12, self.config, document_id=document["id"])
+        save_quiz_result(user["user_id"], "Document Study", "B Tree", 4, 5, self.config, document_id=document["id"], difficulty_level="medium")
+        store_summary(user["user_id"], document["id"], "tfidf", "brief", "en", "- summary", [{"type": "concept", "text": "B tree"}], {"document_level": ["B tree"]}, self.config)
+        session_id = create_chat_session(user["user_id"], "Demo Chat", "B Tree", self.config, document_id=document["id"])
+        add_chat_message(session_id, user["user_id"], "user", "Explain B tree", self.config)
+        add_chat_message(session_id, user["user_id"], "assistant", "B tree explanation", self.config, confidence_score=0.82)
         log_event(user["user_id"], "summary_requested", {"topic": "B Tree"}, self.config)
 
         users_df = get_users_df(self.config)
+        documents_df = get_documents_df(self.config)
         study_df = get_study_df(self.config)
         quiz_df = get_quiz_df(self.config)
+        summary_df = get_summary_df(self.config)
         events_df = get_events_df(config=self.config)
+        messages = list_chat_messages(session_id, self.config)
         status = database_status(self.config)
 
         self.assertTrue(auth["signed_in"])
         self.assertEqual(len(users_df), 1)
+        self.assertEqual(len(documents_df), 1)
         self.assertEqual(len(study_df), 1)
         self.assertEqual(len(quiz_df), 1)
+        self.assertEqual(len(summary_df), 1)
+        self.assertEqual(len(messages), 2)
         self.assertGreaterEqual(len(events_df), 3)
         self.assertTrue(status["connected"])
         self.assertTrue(status["database_configured"])

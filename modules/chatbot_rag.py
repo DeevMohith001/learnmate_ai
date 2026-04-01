@@ -1,39 +1,56 @@
 from __future__ import annotations
 
+from statistics import mean
+from typing import Any
+
 from modules.llama_model import generate_llm_response, llm_is_available
-from modules.vectorstore import retrieve_relevant_chunks
+from modules.vectorstore import retrieve_relevant_chunks_with_scores
 
 
-def chatbot_respond(question: str) -> str:
-    """Answer a question using broader retrieved document context."""
+def chatbot_respond(question: str, history: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    """Answer a question using retrieved context plus recent conversation memory."""
     cleaned_question = question.strip()
     if not cleaned_question:
-        return "Please enter a question about the uploaded document."
+        return {"answer": "Please enter a question about the uploaded document.", "confidence": 0.0, "sources": []}
 
-    context_chunks = retrieve_relevant_chunks(cleaned_question, k=5, score_threshold=3.5)
-
+    history = history or []
+    context_chunks = retrieve_relevant_chunks_with_scores(cleaned_question, k=5, score_threshold=3.5)
     if not context_chunks:
-        return "Sorry, I couldn't find relevant information in the uploaded document."
+        return {
+            "answer": "I am not confident enough to answer from the uploaded document. Try asking about a specific concept or section.",
+            "confidence": 0.05,
+            "sources": [],
+        }
 
-    context = "\n\n".join(context_chunks)
+    avg_confidence = round(mean(item["confidence"] for item in context_chunks), 2)
+    context = "\n\n".join(item["text"] for item in context_chunks)
+    recent_history = history[-8:]
+    history_text = "\n".join(f"{item['role'].upper()}: {item['content']}" for item in recent_history)
 
     if not llm_is_available():
         preview_lines = []
         for index, chunk in enumerate(context_chunks[:3], start=1):
-            preview_lines.append(f"### Relevant Section {index}\n{chunk[:700]}")
-        return "Based on the uploaded material, here are the most relevant sections I found:\n\n" + "\n\n".join(preview_lines)
+            preview_lines.append(f"### Relevant Section {index} (confidence {chunk['confidence']})\n{chunk['text'][:700]}")
+        answer = "Based on the uploaded material, here are the most relevant sections I found:\n\n" + "\n\n".join(preview_lines)
+        return {"answer": answer, "confidence": avg_confidence, "sources": context_chunks}
 
     prompt = f"""
-Use the following CONTEXT gathered from different parts of the uploaded document to answer the question.
-Synthesize the answer across all relevant sections. If the answer appears in multiple places, combine them.
-Do not invent details outside the context.
+You are a document-grounded tutor.
+Use the retrieved CONTEXT and the RECENT CONVERSATION HISTORY to answer the question.
+If confidence is low, say so clearly and avoid guessing.
+
+RECENT CONVERSATION HISTORY:
+{history_text or 'No prior conversation.'}
 
 CONTEXT:
 {context}
 
-QUESTION: {cleaned_question}
+QUESTION:
+{cleaned_question}
 
-Answer in 4-6 sentences.
+Return a concise but helpful answer.
 """
-
-    return generate_llm_response(prompt, max_tokens=260, temperature=0.3)
+    answer = generate_llm_response(prompt, max_tokens=320, temperature=0.25)
+    if avg_confidence < 0.2:
+        answer = "Confidence is low for this answer. " + answer
+    return {"answer": answer, "confidence": avg_confidence, "sources": context_chunks}

@@ -25,16 +25,12 @@ _embed_model_error = None
 
 def _get_embed_model():
     global _embed_model, _embed_model_error
-
     if _embed_model is not None:
         return _embed_model
-
     if SentenceTransformer is None:
         _embed_model_error = "sentence-transformers is not installed."
         return None
-
     local_only = os.getenv("VECTORSTORE_LOCAL_ONLY", "true").lower() == "true"
-
     try:
         _embed_model = SentenceTransformer("multi-qa-MiniLM-L6-cos-v1", local_files_only=local_only)
         _embed_model_error = None
@@ -68,34 +64,28 @@ def _token_overlap_score(query: str, text: str) -> float:
 
 
 def build_vectorstore(texts: list[str], index_path: str = "embeddings/vectordb"):
-    """Persist chunk text and optional embeddings for retrieval."""
     ensure_directory("embeddings")
     index_file, text_file = _index_paths(index_path)
-
     with text_file.open("w", encoding="utf-8") as file:
         json.dump(list(texts), file, ensure_ascii=False, indent=2)
-
     embed_model = _get_embed_model()
     if faiss is None or embed_model is None or not texts:
         return
-
     embeddings = np.asarray(embed_model.encode(texts), dtype="float32")
     index = faiss.IndexFlatL2(embeddings.shape[1])
     index.add(embeddings)
     faiss.write_index(index, str(index_file))
 
 
-def retrieve_relevant_chunks(
+def retrieve_relevant_chunks_with_scores(
     query: str,
     k: int = 5,
     index_path: str = "embeddings/vectordb",
     score_threshold: float = 3.5,
-):
-    """Return the best matching chunks for the supplied query."""
+) -> list[dict[str, float | str]]:
     index_file, text_file = _index_paths(index_path)
     if not text_file.exists():
         return []
-
     with text_file.open("r", encoding="utf-8") as file:
         texts = json.load(file)
 
@@ -104,15 +94,23 @@ def retrieve_relevant_chunks(
         query_embedding = np.asarray(embed_model.encode([query]), dtype="float32")
         index = faiss.read_index(str(index_file))
         distances, indices = index.search(query_embedding, min(max(k * 2, k), len(texts)))
-
-        relevant_chunks = []
+        results = []
         for distance, idx in zip(distances[0], indices[0]):
-            if idx >= 0 and distance <= score_threshold and texts[idx] not in relevant_chunks:
-                relevant_chunks.append(texts[idx])
-            if len(relevant_chunks) >= k:
+            if idx >= 0 and distance <= score_threshold and texts[idx] not in {item['text'] for item in results}:
+                confidence = round(max(0.05, 1 - (float(distance) / max(score_threshold, 0.1))), 2)
+                results.append({"text": texts[idx], "score": round(float(distance), 3), "confidence": confidence})
+            if len(results) >= k:
                 break
-        if relevant_chunks:
-            return relevant_chunks
+        if results:
+            return results
 
     ranked_pairs = sorted(((text, _token_overlap_score(query, text)) for text in texts), key=lambda item: item[1], reverse=True)
-    return [text for text, score in ranked_pairs[:k] if score > 0]
+    output = []
+    for text, score in ranked_pairs[:k]:
+        if score > 0:
+            output.append({"text": text, "score": round(float(score), 3), "confidence": round(min(0.95, 0.35 + score / 10), 2)})
+    return output
+
+
+def retrieve_relevant_chunks(query: str, k: int = 5, index_path: str = "embeddings/vectordb", score_threshold: float = 3.5):
+    return [item["text"] for item in retrieve_relevant_chunks_with_scores(query, k=k, index_path=index_path, score_threshold=score_threshold)]

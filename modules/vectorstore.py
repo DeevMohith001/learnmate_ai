@@ -60,7 +60,12 @@ def _token_overlap_score(query: str, text: str) -> float:
     overlap = sum(text_tokens.count(token) for token in set(query_tokens))
     phrase_bonus = 2.5 if query.strip().lower() in text.lower() else 0.0
     coverage_bonus = min(len(set(query_tokens) & set(text_tokens)), len(set(query_tokens))) * 1.2
-    return float(overlap) + phrase_bonus + coverage_bonus
+    ordered_hits = 0.0
+    lowered_text = text.lower()
+    for token in query_tokens:
+        if token and token in lowered_text:
+            ordered_hits += 0.35
+    return float(overlap) + phrase_bonus + coverage_bonus + ordered_hits
 
 
 def build_vectorstore(texts: list[str], index_path: str = "embeddings/vectordb"):
@@ -93,7 +98,7 @@ def retrieve_relevant_chunks_with_scores(
     if faiss is not None and embed_model is not None and index_file.exists():
         query_embedding = np.asarray(embed_model.encode([query]), dtype="float32")
         index = faiss.read_index(str(index_file))
-        distances, indices = index.search(query_embedding, min(max(k * 2, k), len(texts)))
+        distances, indices = index.search(query_embedding, min(max(k * 3, k), len(texts)))
         results = []
         for distance, idx in zip(distances[0], indices[0]):
             if idx >= 0 and distance <= score_threshold and texts[idx] not in {item['text'] for item in results}:
@@ -106,9 +111,11 @@ def retrieve_relevant_chunks_with_scores(
 
     ranked_pairs = sorted(((text, _token_overlap_score(query, text)) for text in texts), key=lambda item: item[1], reverse=True)
     output = []
-    for text, score in ranked_pairs[:k]:
+    for text, score in ranked_pairs[: max(k * 2, k)]:
         if score > 0:
             output.append({"text": text, "score": round(float(score), 3), "confidence": round(min(0.95, 0.35 + score / 10), 2)})
+        if len(output) >= k:
+            break
     return output
 
 

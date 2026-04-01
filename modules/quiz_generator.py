@@ -9,6 +9,7 @@ from typing import Any
 from database.database_manager import get_cached_questions, get_user_performance_summary, store_quiz_questions
 from modules.llama_model import generate_llm_response, llm_is_available
 from modules.utils import chunk_text
+from modules.summarizer import extract_topics
 
 
 QUESTION_TYPES = ["multiple_choice", "true_false", "fill_blank", "short_answer"]
@@ -36,6 +37,27 @@ def _sample_sentences(sentences: list[str], count: int) -> list[str]:
         return sentences
     step = max(1, len(sentences) // count)
     return [sentences[index] for index in range(0, len(sentences), step)][:count]
+
+
+def _topic_focus_sentences(content: str, topics: list[str], count: int) -> list[str]:
+    all_sentences = _split_sentences(content)
+    if not topics:
+        return _sample_sentences(all_sentences, count)
+    selected: list[str] = []
+    for topic in topics:
+        topic_words = {word.lower() for word in topic.split() if word}
+        for sentence in all_sentences:
+            sentence_words = {word.lower() for word in _important_words(sentence)}
+            if topic.lower() in sentence.lower() or topic_words & sentence_words:
+                if sentence not in selected:
+                    selected.append(sentence)
+            if len(selected) >= count:
+                return selected[:count]
+    if len(selected) < count:
+        for sentence in _sample_sentences(all_sentences, count):
+            if sentence not in selected:
+                selected.append(sentence)
+    return selected[:count]
 
 
 def _question_seed(content: str) -> int:
@@ -108,7 +130,8 @@ def _fallback_question(sentence: str, question_type: str, rng: random.Random, ke
 
 
 def _fallback_quiz(content: str, count: int, difficulty: str) -> list[dict[str, Any]]:
-    sentences = _sample_sentences(_split_sentences(content), max(count * 2, 6))
+    topics = extract_topics(content, limit=max(4, count))
+    sentences = _topic_focus_sentences(content, topics, max(count * 3, 8))
     if not sentences:
         return []
     rng = random.Random(_question_seed(content))
@@ -117,11 +140,19 @@ def _fallback_quiz(content: str, count: int, difficulty: str) -> list[dict[str, 
         keyword_pool.extend(_important_words(sentence))
     keyword_pool = list(dict.fromkeys(keyword_pool))
     output: list[dict[str, Any]] = []
+    used_questions: set[str] = set()
     for index in range(count):
         sentence = sentences[index % len(sentences)]
         question_type = QUESTION_TYPES[index % len(QUESTION_TYPES)]
         question = _fallback_question(sentence, question_type, rng, keyword_pool, difficulty)
         if question is not None:
+            if question["question"] in used_questions:
+                alt_sentence = sentences[(index + 1) % len(sentences)]
+                question = _fallback_question(alt_sentence, question_type, rng, keyword_pool, difficulty)
+                if question is None or question["question"] in used_questions:
+                    continue
+            used_questions.add(question["question"])
+            question["topic"] = topics[index % len(topics)] if topics else "general_document"
             output.append(question)
     return output
 
@@ -165,14 +196,19 @@ def _validate_question(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _llm_quiz(content: str, count: int, difficulty: str) -> list[dict[str, Any]]:
+    topics = extract_topics(content, limit=max(4, count))
+    topic_text = ", ".join(topics[: min(len(topics), count)]) or "the most important concepts"
     prompt = f"""
 You are an AI instructor creating a quiz from study material.
 Return valid JSON only.
 Generate exactly {count} questions.
 Mix these types when possible: multiple_choice, true_false, fill_blank, short_answer.
 Difficulty should be {difficulty}.
+Focus on these document topics: {topic_text}.
+Questions should test understanding, not surface memorization.
 For multiple_choice, options must contain exactly 4 choices and answer must be the full correct option text.
 For true_false, options must be ["True", "False"].
+Every question must include a short explanation describing why the answer is correct.
 Avoid repeating the same concept.
 
 JSON format:
@@ -214,12 +250,15 @@ def generate_quiz_package(
     user_id: int | str | None = None,
     topic: str = "general_document",
     document_id: int | None = None,
+    difficulty_override: str | None = None,
     config=None,
 ) -> dict[str, Any]:
-    difficulty = _infer_difficulty(user_id, config)
-    cached = get_cached_questions(document_id, topic, difficulty, count, config)
+    difficulty = difficulty_override or _infer_difficulty(user_id, config)
+    extracted_topics = extract_topics(content, limit=max(4, count))
+    cache_topic = topic if topic != "general_document" else (extracted_topics[0] if extracted_topics else topic)
+    cached = get_cached_questions(document_id, cache_topic, difficulty, count, config)
     if len(cached) >= count:
-        return {"questions": cached[:count], "difficulty": difficulty, "cached": True}
+        return {"questions": cached[:count], "difficulty": difficulty, "cached": True, "topics": extracted_topics}
 
     questions: list[dict[str, Any]] = []
     if llm_is_available():
@@ -233,10 +272,10 @@ def generate_quiz_package(
     if not questions:
         questions = _fallback_quiz(content, count, difficulty)
 
-    question_ids = store_quiz_questions(document_id, topic, questions, config)
+    question_ids = store_quiz_questions(document_id, cache_topic, questions, config)
     for question, question_id in zip(questions, question_ids, strict=False):
         question["question_id"] = question_id
-    return {"questions": questions, "difficulty": difficulty, "cached": False}
+    return {"questions": questions, "difficulty": difficulty, "cached": False, "topics": extracted_topics}
 
 
 def generate_quiz_questions(content: str, count: int = 5) -> list[dict[str, Any]]:

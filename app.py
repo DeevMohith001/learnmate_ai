@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import uuid
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOCAL_SITE_PACKAGES = PROJECT_ROOT / "venv" / "Lib" / "site-packages"
@@ -54,7 +55,13 @@ from modules import analytics, chatbot_rag, quiz_generator, summarizer, utils, v
 
 DOC_PATH = "data/latest_doc.txt"
 SUMMARY_METHODS = ["abstractive", "tfidf", "textrank"]
+SUMMARY_MODES = ["bullet_summary", "concept_explanation", "exam_notes", "revision"]
 LANGUAGE_OPTIONS = ["en", "hi", "same"]
+CHAT_ANSWER_MODES = {
+    "Explain Like Teacher": "teacher",
+    "Short Answer": "short",
+    "Step-by-Step": "step_by_step",
+}
 
 
 def init_state() -> None:
@@ -249,22 +256,26 @@ def render_chatbot_sidebar(config) -> None:
     history_rows = list_chat_messages(session_id, config, limit=40) if session_id else []
     history = [{"role": row["role"], "content": row["message_text"]} for row in history_rows]
 
+    chat_mode_label = st.sidebar.selectbox("Answer style", list(CHAT_ANSWER_MODES.keys()), index=0)
     question = st.sidebar.text_area("Ask about the uploaded document", key="sidebar_chat_input")
     if st.sidebar.button("Send Chat Question"):
-        response = chatbot_rag.chatbot_respond(question, history=history)
+        response = chatbot_rag.chatbot_respond(question, history=history, answer_mode=CHAT_ANSWER_MODES[chat_mode_label])
         if question.strip() and session_id is not None:
+            answer_text = response["answer"]
+            if response.get("suggested_followups"):
+                answer_text += "\n\nSuggested follow-ups:\n" + "\n".join(f"- {item}" for item in response["suggested_followups"])
             add_chat_message(session_id, user_id, "user", question, config=config)
             assistant_message_id = add_chat_message(
                 session_id,
                 user_id,
                 "assistant",
-                response["answer"],
+                answer_text,
                 config=config,
                 confidence_score=response["confidence"],
                 retrieval_metadata={"sources": response["sources"]},
             )
             st.session_state.last_assistant_message_id = assistant_message_id
-            log_chat_event(user_id, current_document_topic(), question, response["answer"], config=config)
+            log_chat_event(user_id, current_document_topic(), question, answer_text, config=config)
             log_event(
                 user_id,
                 "chat_message",
@@ -283,6 +294,11 @@ def render_chatbot_sidebar(config) -> None:
         for row in history_rows[-12:]:
             label = "You" if row["role"] == "user" else f"Bot ({row.get('confidence_score') or 0:.2f})"
             st.sidebar.markdown(f"**{label}:** {row['message_text']}")
+            metadata = row.get("retrieval_metadata") or {}
+            sources = metadata.get("sources", [])
+            if row["role"] == "assistant" and sources:
+                preview = sources[0]["text"][:220].replace("\n", " ")
+                st.sidebar.caption(f"Source: {preview}...")
 
     if st.session_state.last_assistant_message_id:
         rating = st.sidebar.radio("Rate latest bot answer", [1, 2, 3, 4, 5], horizontal=True, key="chat_rating")
@@ -326,7 +342,7 @@ def render_summarizer_page(config) -> None:
         return
     st.caption(f"Active document: {st.session_state.current_document_name}")
     controls = st.columns(3)
-    mode = controls[0].radio("Detail", ["brief", "detailed"], horizontal=True)
+    mode = controls[0].selectbox("Summary style", SUMMARY_MODES, format_func=lambda value: value.replace("_", " ").title())
     method = controls[1].selectbox("Method", SUMMARY_METHODS)
     target_language = controls[2].selectbox("Output language", LANGUAGE_OPTIONS, index=0)
     if st.button("Summarize Document"):
@@ -374,6 +390,13 @@ def render_summarizer_page(config) -> None:
             st.caption("Loaded from summary cache.")
         st.markdown("### Summary")
         st.markdown(result["summary_text"])
+        if result.get("topics"):
+            st.markdown("### Main Topics")
+            st.write(", ".join(result["topics"]))
+        if result.get("important_sentences"):
+            st.markdown("### Most Important Lines")
+            for line in result["important_sentences"]:
+                st.markdown(f"- {line}")
         insights_df = pd.DataFrame(result.get("key_insights", []))
         if not insights_df.empty:
             st.markdown("### Key Insights")
@@ -382,9 +405,13 @@ def render_summarizer_page(config) -> None:
         if hierarchy.get("section_level"):
             st.markdown("### Hierarchical View")
             st.dataframe(pd.DataFrame(hierarchy["section_level"]), width="stretch")
+        if hierarchy.get("topic_level"):
+            st.markdown("### Topic-Wise Summary")
+            topic_rows = [{"topic": item["topic"], "summary": " ".join(item["summary"])} for item in hierarchy["topic_level"]]
+            st.dataframe(pd.DataFrame(topic_rows), width="stretch")
 
 
-def _render_question(index: int, question_data: dict[str, any]):
+def _render_question(index: int, question_data: dict[str, Any]):
     qtype = question_data.get("type", "multiple_choice")
     prompt = f"Q{index + 1}: {question_data['question']}"
     if qtype in {"multiple_choice", "true_false"}:
@@ -413,7 +440,9 @@ def render_quiz_page(config) -> None:
         return
     performance = get_user_performance_summary(current_user_id(), config)
     st.caption(f"Adaptive difficulty: {performance['recommended_difficulty']} based on average score {performance['avg_score']:.1f}%")
-    num_questions = st.slider("Number of questions", 2, 10, 5)
+    controls = st.columns(2)
+    num_questions = controls[0].slider("Number of questions", 2, 10, 5)
+    selected_difficulty = controls[1].selectbox("Difficulty", ["adaptive", "easy", "medium", "hard"], index=0)
     if st.button("Generate Quiz"):
         with st.spinner("Generating adaptive quiz..."):
             st.session_state.quiz_package = quiz_generator.generate_quiz_package(
@@ -422,6 +451,7 @@ def render_quiz_page(config) -> None:
                 user_id=current_user_id(),
                 topic=current_document_topic(),
                 document_id=current_document_id(),
+                difficulty_override=None if selected_difficulty == "adaptive" else selected_difficulty,
                 config=config,
             )
             log_event(current_user_id(), "quiz_generated", {"topic": current_document_topic(), "questions": num_questions}, config=config, activity_type="quiz_generation", resource_id=str(current_document_id()), metadata={"difficulty": st.session_state.quiz_package['difficulty']}, topics=[current_document_topic()])
@@ -432,6 +462,8 @@ def render_quiz_page(config) -> None:
         return
 
     questions = package["questions"]
+    if package.get("topics"):
+        st.caption("Quiz coverage: " + ", ".join(package["topics"][:6]))
     with st.form("quiz_attempt_form"):
         answers: list[str | None] = []
         for idx, question_data in enumerate(questions):
@@ -529,6 +561,26 @@ def render_analytics_page(config) -> None:
         event_counts = user_events_df.groupby("activity_type", as_index=False).size().set_index("activity_type")
         st.bar_chart(event_counts)
         st.dataframe(user_events_df[["created_at", "activity_type", "resource_id", "metadata_json"]].head(15), width="stretch")
+
+    learning_profile = analytics.build_learning_profile(user_id, study_df, quiz_df, events_df)
+    st.markdown("### Learning Profile")
+    profile_cols = st.columns(4)
+    profile_cols[0].metric("Average Score", f"{learning_profile['avg_score']:.1f}%")
+    profile_cols[1].metric("Strong Topics", len(learning_profile["strong_topics"]))
+    profile_cols[2].metric("Weak Topics", len(learning_profile["weak_topics"]))
+    profile_cols[3].metric("Active Topics", len(learning_profile["most_active_topics"]))
+    profile_table = pd.DataFrame(
+        [
+            {"category": "Strong Topics", "values": ", ".join(learning_profile["strong_topics"]) or "None yet"},
+            {"category": "Weak Topics", "values": ", ".join(learning_profile["weak_topics"]) or "None yet"},
+            {"category": "Most Active Topics", "values": ", ".join(learning_profile["most_active_topics"]) or "None yet"},
+        ]
+    )
+    st.dataframe(profile_table, width="stretch")
+    if learning_profile["recommendations"]:
+        st.markdown("### Recommendations")
+        for item in learning_profile["recommendations"]:
+            st.markdown(f"- {item}")
 
     history = analytics.recent_activity_history(str(user_id))
     if not history["recent_activity"].empty:

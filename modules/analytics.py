@@ -241,3 +241,59 @@ def spark_trends() -> pd.DataFrame:
 def recent_activity_history(user_id: str) -> dict[str, pd.DataFrame]:
     history = recent_user_history(user_id)
     return {key: pd.DataFrame(value) for key, value in history.items()}
+
+
+def build_learning_profile(
+    user_id: int | str,
+    study_df: pd.DataFrame,
+    quiz_df: pd.DataFrame,
+    events_df: pd.DataFrame,
+) -> dict[str, Any]:
+    user_id = int(user_id)
+    profile = {
+        "avg_score": 0.0,
+        "strong_topics": [],
+        "weak_topics": [],
+        "most_active_topics": [],
+        "recommendations": [],
+    }
+
+    user_quiz_df = quiz_df[quiz_df["user_id"] == user_id].copy() if not quiz_df.empty and "user_id" in quiz_df.columns else pd.DataFrame()
+    user_study_df = study_df[study_df["user_id"] == user_id].copy() if not study_df.empty and "user_id" in study_df.columns else pd.DataFrame()
+    user_events_df = events_df[events_df["user_id"] == user_id].copy() if not events_df.empty and "user_id" in events_df.columns else pd.DataFrame()
+
+    topic_scores = pd.DataFrame()
+    if not user_quiz_df.empty and {"topic", "score_percent"}.issubset(user_quiz_df.columns):
+        topic_scores = (
+            user_quiz_df.groupby("topic", as_index=False)
+            .agg(avg_score=("score_percent", "mean"), attempts=("topic", "size"))
+            .sort_values(["avg_score", "attempts"], ascending=[False, False])
+        )
+        profile["avg_score"] = round(float(topic_scores["avg_score"].mean()), 2)
+        profile["strong_topics"] = topic_scores[topic_scores["avg_score"] >= 75]["topic"].head(5).tolist()
+        profile["weak_topics"] = topic_scores[topic_scores["avg_score"] < 60].sort_values("avg_score")["topic"].head(5).tolist()
+
+    activity_topics = pd.Series(dtype=object)
+    if not user_study_df.empty and "topic" in user_study_df.columns:
+        activity_topics = pd.concat([activity_topics, user_study_df["topic"].dropna().astype(str)], ignore_index=True)
+    if not user_events_df.empty and "topics_json" in user_events_df.columns:
+        expanded_topics: list[str] = []
+        for raw in user_events_df["topics_json"].fillna("[]"):
+            try:
+                expanded_topics.extend(json.loads(raw) or [])
+            except Exception:
+                continue
+        if expanded_topics:
+            activity_topics = pd.concat([activity_topics, pd.Series(expanded_topics, dtype=object)], ignore_index=True)
+    if not activity_topics.empty:
+        profile["most_active_topics"] = activity_topics.value_counts().head(5).index.tolist()
+
+    recommendations: list[str] = []
+    for topic in profile["weak_topics"][:3]:
+        recommendations.append(f"Revise {topic} and try another medium quiz.")
+    if not recommendations and profile["strong_topics"]:
+        recommendations.append(f"Move to a harder quiz on {profile['strong_topics'][0]}.")
+    if not recommendations and profile["most_active_topics"]:
+        recommendations.append(f"Continue studying {profile['most_active_topics'][0]} and generate a summary revision sheet.")
+    profile["recommendations"] = recommendations
+    return profile

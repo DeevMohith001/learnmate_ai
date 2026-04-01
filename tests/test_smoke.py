@@ -6,8 +6,20 @@ import shutil
 import unittest
 
 from data_ingestion.data_logger import ensure_log_files, load_json_records, log_chat_event, log_quiz_attempt, log_user_activity
+from database.database_manager import (
+    authenticate_user,
+    database_status,
+    get_events_df,
+    get_quiz_df,
+    get_study_df,
+    get_users_df,
+    initialize_database_schema,
+    log_event,
+    log_study_session,
+    register_user,
+    save_quiz_result,
+)
 from learnmate_ai.config import AppConfig
-from learnmate_ai.database_manager import database_status
 from learnmate_ai.storage import ensure_data_directories
 from modules import analytics, chatbot_rag, vectorstore
 
@@ -38,9 +50,10 @@ class LearnMateSmokeTests(unittest.TestCase):
             streaming_input_dir=self.temp_root / "data" / "stream_input",
             streaming_output_dir=self.temp_root / "data" / "stream_output",
             checkpoint_dir=self.temp_root / "data" / "checkpoints",
-            mysql_password="",
+            sqlite_db_path=self.temp_root / "data" / "learnmate_test.db",
         )
         ensure_data_directories(self.config)
+        initialize_database_schema(self.config)
 
     def tearDown(self):
         shutil.rmtree(self.temp_root, ignore_errors=True)
@@ -78,10 +91,26 @@ class LearnMateSmokeTests(unittest.TestCase):
         self.assertEqual(chat_records[0]["action_type"], "chat_message")
         self.assertEqual(activity_records[0]["metadata"]["mode"], "brief")
 
-    def test_database_status_reports_unconfigured_mysql(self):
+    def test_local_database_tracks_user_activity(self):
+        user = register_user("Test User", "test@example.com", "password123", self.config)
+        auth = authenticate_user("test@example.com", "password123", self.config)
+        log_study_session(user["user_id"], "Document Study", "B Tree", 12, self.config)
+        save_quiz_result(user["user_id"], "Document Study", "B Tree", 4, 5, self.config)
+        log_event(user["user_id"], "summary_requested", {"topic": "B Tree"}, self.config)
+
+        users_df = get_users_df(self.config)
+        study_df = get_study_df(self.config)
+        quiz_df = get_quiz_df(self.config)
+        events_df = get_events_df(config=self.config)
         status = database_status(self.config)
-        self.assertFalse(status["connected"])
-        self.assertFalse(status["database_configured"])
+
+        self.assertTrue(auth["signed_in"])
+        self.assertEqual(len(users_df), 1)
+        self.assertEqual(len(study_df), 1)
+        self.assertEqual(len(quiz_df), 1)
+        self.assertGreaterEqual(len(events_df), 3)
+        self.assertTrue(status["connected"])
+        self.assertTrue(status["database_configured"])
 
 
 if __name__ == "__main__":

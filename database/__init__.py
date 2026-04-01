@@ -1,17 +1,33 @@
 from .database_manager import (
     authenticate_user,
     database_status,
+    get_events_df,
+    get_quiz_df,
+    get_study_df,
+    get_user,
+    get_users_df,
     initialize_database_schema,
     list_registered_users,
+    log_event,
+    log_study_session,
     persist_pipeline_report,
     register_user,
+    save_quiz_result,
 )
 
 __all__ = [
     "authenticate_user",
     "database_status",
+    "get_events_df",
+    "get_quiz_df",
+    "get_study_df",
+    "get_user",
+    "get_users_df",
     "initialize_database_schema",
     "list_registered_users",
+    "log_event",
+    "log_study_session",
     "persist_pipeline_report",
     "register_user",
+    "save_quiz_result",
 ]

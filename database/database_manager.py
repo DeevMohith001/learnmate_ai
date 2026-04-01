@@ -2,19 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import hashlib
+import json
 import re
 import secrets
+import sqlite3
+from pathlib import Path
 from typing import Any
 
-try:
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.exc import SQLAlchemyError
-except Exception:
-    create_engine = None
-    text = None
-
-    class SQLAlchemyError(Exception):
-        pass
+import pandas as pd
 
 from learnmate_ai.config import AppConfig, get_config
 
@@ -22,63 +17,22 @@ from learnmate_ai.config import AppConfig, get_config
 EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
-def _require_sqlalchemy() -> None:
-    if create_engine is None or text is None:
-        raise RuntimeError("SQLAlchemy and PyMySQL are required for MySQL support. Install requirements.txt first.")
-
-
-def _create_engine(config: AppConfig | None = None):
-    _require_sqlalchemy()
+def _db_path(config: AppConfig | None = None) -> Path:
     app_config = config or get_config()
-    if not app_config.database_configured:
-        raise RuntimeError("MySQL is not configured. Set MYSQL_HOST, MYSQL_DATABASE, MYSQL_USER, and MYSQL_PASSWORD in .env.")
-    return create_engine(
-        app_config.sqlalchemy_uri,
-        future=True,
-        pool_pre_ping=True,
-        pool_recycle=app_config.mysql_pool_recycle,
-    )
+    db_path = Path(app_config.sqlite_db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return db_path
 
 
-def initialize_database_schema(config: AppConfig | None = None) -> None:
-    """Create MySQL tables used by the application."""
-    engine = _create_engine(config)
-    statements = [
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id BIGINT PRIMARY KEY AUTO_INCREMENT,
-            full_name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            created_at VARCHAR(40) NOT NULL
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS user_signins (
-            id BIGINT PRIMARY KEY AUTO_INCREMENT,
-            user_id BIGINT NOT NULL,
-            signed_in_at VARCHAR(40) NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS pipeline_runs (
-            id BIGINT PRIMARY KEY AUTO_INCREMENT,
-            report_name VARCHAR(255) NOT NULL,
-            source_path TEXT NOT NULL,
-            output_path TEXT,
-            records_processed BIGINT DEFAULT 0,
-            status VARCHAR(40) NOT NULL,
-            created_at VARCHAR(40) NOT NULL
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """,
-    ]
-    try:
-        with engine.begin() as connection:
-            for statement in statements:
-                connection.execute(text(statement))
-    finally:
-        engine.dispose()
+def _connect(config: AppConfig | None = None) -> sqlite3.Connection:
+    connection = sqlite3.connect(_db_path(config), detect_types=sqlite3.PARSE_DECLTYPES)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _hash_password(password: str) -> str:
@@ -107,8 +61,59 @@ def _verify_password(password: str, stored_hash: str) -> bool:
     return secrets.compare_digest(derived_key.hex(), hash_hex)
 
 
+def initialize_database_schema(config: AppConfig | None = None) -> None:
+    """Create the local app database with connected user/activity tables."""
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS study_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            time_spent INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS quiz_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            score REAL NOT NULL,
+            total_questions INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            event_type TEXT NOT NULL,
+            event_data TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+        """,
+    ]
+    with _connect(config) as connection:
+        for statement in statements:
+            connection.execute(statement)
+        connection.commit()
+
+
 def register_user(full_name: str, email: str, password: str, config: AppConfig | None = None) -> dict[str, Any]:
-    """Register a new user in MySQL."""
     full_name = full_name.strip()
     email = email.strip().lower()
     password = password.strip()
@@ -121,36 +126,23 @@ def register_user(full_name: str, email: str, password: str, config: AppConfig |
         raise ValueError("Password must be at least 8 characters long.")
 
     initialize_database_schema(config)
-    engine = _create_engine(config)
-    created_at = datetime.now(UTC).isoformat(timespec="seconds")
+    with _connect(config) as connection:
+        existing = connection.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        if existing is not None:
+            raise ValueError("A user with this email already exists.")
 
-    try:
-        with engine.begin() as connection:
-            existing = connection.execute(text("SELECT id FROM users WHERE email = :email"), {"email": email}).fetchone()
-            if existing:
-                raise ValueError("A user with this email already exists.")
+        cursor = connection.execute(
+            "INSERT INTO users (full_name, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+            (full_name, email, _hash_password(password), _now()),
+        )
+        connection.commit()
+        user_id = int(cursor.lastrowid)
 
-            result = connection.execute(
-                text(
-                    """
-                    INSERT INTO users (full_name, email, password_hash, created_at)
-                    VALUES (:full_name, :email, :password_hash, :created_at)
-                    """
-                ),
-                {
-                    "full_name": full_name,
-                    "email": email,
-                    "password_hash": _hash_password(password),
-                    "created_at": created_at,
-                },
-            )
-            return {"user_id": int(result.lastrowid), "email": email, "stored": True}
-    finally:
-        engine.dispose()
+    log_event(user_id, "user_registered", {"email": email}, config)
+    return {"user_id": user_id, "full_name": full_name, "email": email, "stored": True}
 
 
 def authenticate_user(email: str, password: str, config: AppConfig | None = None) -> dict[str, Any]:
-    """Authenticate a user and store the signin event in MySQL."""
     email = email.strip().lower()
     password = password.strip()
     if not EMAIL_PATTERN.match(email):
@@ -159,95 +151,143 @@ def authenticate_user(email: str, password: str, config: AppConfig | None = None
         raise ValueError("Password is required.")
 
     initialize_database_schema(config)
-    engine = _create_engine(config)
-    signed_in_at = datetime.now(UTC).isoformat(timespec="seconds")
-    try:
-        with engine.begin() as connection:
-            user_row = connection.execute(
-                text("SELECT id, full_name, email, password_hash FROM users WHERE email = :email"),
-                {"email": email},
-            ).fetchone()
-            if not user_row or not _verify_password(password, user_row.password_hash):
-                raise ValueError("Invalid email or password.")
+    with _connect(config) as connection:
+        row = connection.execute(
+            "SELECT id, full_name, email, password_hash FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        if row is None or not _verify_password(password, row["password_hash"]):
+            raise ValueError("Invalid email or password.")
 
-            connection.execute(
-                text("INSERT INTO user_signins (user_id, signed_in_at) VALUES (:user_id, :signed_in_at)"),
-                {"user_id": int(user_row.id), "signed_in_at": signed_in_at},
-            )
-            return {"user_id": int(user_row.id), "full_name": user_row.full_name, "email": user_row.email, "signed_in": True}
-    finally:
-        engine.dispose()
+    log_event(int(row["id"]), "user_signed_in", {"email": row["email"]}, config)
+    return {
+        "user_id": int(row["id"]),
+        "full_name": row["full_name"],
+        "email": row["email"],
+        "signed_in": True,
+    }
+
+
+def get_user(user_id: int | str, config: AppConfig | None = None) -> dict[str, Any] | None:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        row = connection.execute(
+            "SELECT id, full_name, email, created_at FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def list_registered_users(config: AppConfig | None = None) -> list[dict[str, Any]]:
-    """Return registered users for display in the UI."""
     initialize_database_schema(config)
-    engine = _create_engine(config)
-    try:
-        with engine.connect() as connection:
-            rows = connection.execute(
-                text(
-                    """
-                    SELECT id, full_name, email, created_at
-                    FROM users
-                    ORDER BY created_at DESC
-                    """
-                )
-            )
-            return [dict(row._mapping) for row in rows]
-    finally:
-        engine.dispose()
+    with _connect(config) as connection:
+        rows = connection.execute(
+            "SELECT id, full_name, email, created_at FROM users ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def log_event(user_id: int | str | None, event_type: str, event_data: dict[str, Any] | str, config: AppConfig | None = None) -> int:
+    initialize_database_schema(config)
+    payload = event_data if isinstance(event_data, str) else json.dumps(event_data, ensure_ascii=False)
+    with _connect(config) as connection:
+        cursor = connection.execute(
+            "INSERT INTO events (user_id, event_type, event_data, created_at) VALUES (?, ?, ?, ?)",
+            (None if user_id in {None, '', 'guest'} else int(user_id), event_type.strip(), payload, _now()),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def log_study_session(user_id: int | str, subject: str, topic: str, time_spent: int, config: AppConfig | None = None) -> int:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        cursor = connection.execute(
+            "INSERT INTO study_sessions (user_id, subject, topic, time_spent, created_at) VALUES (?, ?, ?, ?, ?)",
+            (int(user_id), subject.strip(), topic.strip(), int(time_spent), _now()),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def save_quiz_result(
+    user_id: int | str,
+    subject: str,
+    topic: str,
+    score: float,
+    total_questions: int,
+    config: AppConfig | None = None,
+) -> int:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        cursor = connection.execute(
+            "INSERT INTO quiz_results (user_id, subject, topic, score, total_questions, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (int(user_id), subject.strip(), topic.strip(), float(score), int(total_questions), _now()),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def get_users_df(config: AppConfig | None = None) -> pd.DataFrame:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        return pd.read_sql_query("SELECT id, full_name, email, created_at FROM users ORDER BY id DESC", connection)
+
+
+def get_study_df(config: AppConfig | None = None) -> pd.DataFrame:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        return pd.read_sql_query(
+            "SELECT id, user_id, subject, topic, time_spent, created_at FROM study_sessions ORDER BY id DESC",
+            connection,
+        )
+
+
+def get_quiz_df(config: AppConfig | None = None) -> pd.DataFrame:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        quiz_df = pd.read_sql_query(
+            "SELECT id, user_id, subject, topic, score, total_questions, created_at FROM quiz_results ORDER BY id DESC",
+            connection,
+        )
+    if not quiz_df.empty:
+        quiz_df["score_percent"] = (quiz_df["score"] / quiz_df["total_questions"].replace(0, 1) * 100).round(2)
+    return quiz_df
+
+
+def get_events_df(limit: int = 500, config: AppConfig | None = None) -> pd.DataFrame:
+    initialize_database_schema(config)
+    with _connect(config) as connection:
+        return pd.read_sql_query(
+            "SELECT id, user_id, event_type, event_data, created_at FROM events ORDER BY id DESC LIMIT ?",
+            connection,
+            params=(int(limit),),
+        )
 
 
 def database_status(config: AppConfig | None = None) -> dict[str, Any]:
-    """Return MySQL connection status and configuration details."""
     app_config = config or get_config()
-    base_status = {
-        "database": app_config.mysql_database,
-        "host": app_config.mysql_host,
-        "port": app_config.mysql_port,
-        "database_configured": app_config.database_configured,
-    }
-    if create_engine is None:
-        return {**base_status, "connected": False, "error": "SQLAlchemy or PyMySQL is not installed."}
-    if not app_config.database_configured:
-        return {**base_status, "connected": False, "error": "MySQL environment variables are incomplete."}
-
+    db_path = _db_path(app_config)
     try:
-        engine = _create_engine(app_config)
-        try:
-            with engine.connect() as connection:
-                connection.execute(text("SELECT 1"))
-        finally:
-            engine.dispose()
-        return {**base_status, "connected": True}
-    except (SQLAlchemyError, RuntimeError) as exc:
-        return {**base_status, "connected": False, "error": str(exc)}
+        initialize_database_schema(app_config)
+        with _connect(app_config) as connection:
+            connection.execute("SELECT 1")
+        return {
+            "connected": True,
+            "database": str(db_path),
+            "exists": db_path.exists(),
+            "database_configured": app_config.database_configured,
+        }
+    except Exception as exc:
+        return {
+            "connected": False,
+            "database": str(db_path),
+            "exists": db_path.exists(),
+            "database_configured": app_config.database_configured,
+            "error": str(exc),
+        }
 
 
 def persist_pipeline_report(report: dict[str, Any], config: AppConfig | None = None) -> dict[str, Any]:
-    """Persist batch pipeline metadata to MySQL."""
-    initialize_database_schema(config)
-    engine = _create_engine(config)
-    created_at = datetime.now(UTC).isoformat(timespec="seconds")
-    try:
-        with engine.begin() as connection:
-            result = connection.execute(
-                text(
-                    """
-                    INSERT INTO pipeline_runs (report_name, source_path, output_path, records_processed, status, created_at)
-                    VALUES (:report_name, :source_path, :output_path, :records_processed, :status, :created_at)
-                    """
-                ),
-                {
-                    "report_name": report.get("report_name", "topic_performance"),
-                    "source_path": report.get("source_path", ""),
-                    "output_path": report.get("output_path", ""),
-                    "records_processed": int(report.get("records_processed", 0)),
-                    "status": report.get("status", "completed"),
-                    "created_at": created_at,
-                },
-            )
-            return {"run_id": int(result.lastrowid), "stored": True}
-    finally:
-        engine.dispose()
+    run_id = log_event(None, "pipeline_report", report, config)
+    return {"run_id": run_id, "stored": True}

@@ -3,31 +3,36 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from importlib import import_module
 
 import numpy as np
 
 from modules.utils import clean_token, ensure_directory
 
-try:
-    import faiss
-except Exception:
-    faiss = None
-
-try:
-    from sentence_transformers import SentenceTransformer
-except Exception:
-    SentenceTransformer = None
-
-
 _embed_model = None
 _embed_model_error = None
+_faiss_module = None
+
+
+def _get_faiss():
+    global _faiss_module
+    if _faiss_module is not None:
+        return _faiss_module
+    try:
+        _faiss_module = import_module("faiss")
+    except Exception:
+        _faiss_module = None
+    return _faiss_module
 
 
 def _get_embed_model():
     global _embed_model, _embed_model_error
     if _embed_model is not None:
         return _embed_model
-    if SentenceTransformer is None:
+    try:
+        sentence_transformers = import_module("sentence_transformers")
+        SentenceTransformer = sentence_transformers.SentenceTransformer
+    except Exception:
         _embed_model_error = "sentence-transformers is not installed."
         return None
     local_only = os.getenv("VECTORSTORE_LOCAL_ONLY", "true").lower() == "true"
@@ -74,6 +79,7 @@ def build_vectorstore(texts: list[str], index_path: str = "embeddings/vectordb")
     with text_file.open("w", encoding="utf-8") as file:
         json.dump(list(texts), file, ensure_ascii=False, indent=2)
     embed_model = _get_embed_model()
+    faiss = _get_faiss()
     if faiss is None or embed_model is None or not texts:
         return
     embeddings = np.asarray(embed_model.encode(texts), dtype="float32")
@@ -95,6 +101,7 @@ def retrieve_relevant_chunks_with_scores(
         texts = json.load(file)
 
     embed_model = _get_embed_model()
+    faiss = _get_faiss()
     if faiss is not None and embed_model is not None and index_file.exists():
         query_embedding = np.asarray(embed_model.encode([query]), dtype="float32")
         index = faiss.read_index(str(index_file))

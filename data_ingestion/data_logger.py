@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from learnmate_ai.config import AppConfig, get_config
-from learnmate_ai.storage import ensure_data_directories
+from learnmate_ai.storage import ensure_data_directories, timestamped_name
 
 
 LOG_SCHEMAS = {
@@ -30,10 +30,15 @@ def ensure_log_files(config: AppConfig | None = None) -> dict[str, Path]:
 
 
 def _append_log(filename: str, payload: dict[str, Any], config: AppConfig | None = None) -> Path:
-    paths = ensure_log_files(config)
+    app_config = ensure_data_directories(config or get_config())
+    paths = ensure_log_files(app_config)
     path = paths[filename]
     with path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+    # Mirror each event into the streaming input directory as a micro-batch file.
+    stream_event_path = app_config.streaming_input_dir / timestamped_name(filename)
+    stream_event_path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
     return path
 
 

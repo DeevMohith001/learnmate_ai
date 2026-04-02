@@ -104,6 +104,17 @@ def _candidate_sentences(query: str, context_chunks: list[dict[str, Any]]) -> li
     return ranked[:6]
 
 
+def _filter_context_chunks(query: str, context_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[tuple[float, dict[str, Any]]] = []
+    for chunk in context_chunks:
+        sentences = _split_sentences(chunk["text"])
+        best_score = max((_score_line(query, sentence) for sentence in sentences), default=-5.0)
+        if best_score > 0:
+            filtered.append((best_score, chunk))
+    ranked_chunks = [chunk for _, chunk in sorted(filtered, key=lambda item: item[0], reverse=True)]
+    return ranked_chunks[:5] if ranked_chunks else context_chunks[:3]
+
+
 def _lexical_answer(query: str, context_chunks: list[dict[str, Any]], answer_mode: str) -> str:
     if not context_chunks:
         return "I could not find enough evidence in the uploaded document."
@@ -138,6 +149,7 @@ def chatbot_respond(question: str, history: list[dict[str, str]] | None = None, 
 
     history = history or []
     context_chunks = retrieve_relevant_chunks_with_scores(cleaned_question, k=8, score_threshold=4.8)
+    context_chunks = _filter_context_chunks(cleaned_question, context_chunks)
     if not context_chunks:
         return {
             "answer": "I am not confident enough to answer from the uploaded document. Try asking about a specific concept or section.",

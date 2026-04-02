@@ -17,7 +17,6 @@ if LOCAL_SITE_PACKAGES.exists():
 import pandas as pd
 import streamlit as st
 
-from batch_processing.big_data_pipeline import run_batch_pipeline
 from data_ingestion.data_logger import ensure_log_files, log_chat_event, log_quiz_attempt, log_user_activity
 from database.database_manager import (
     add_chat_message,
@@ -48,9 +47,7 @@ from database.database_manager import (
     update_question_quality,
 )
 from learnmate_ai.config import get_config
-from learnmate_ai.spark_manager import spark_runtime_status
 from learnmate_ai.storage import ensure_data_directories, save_uploaded_file
-from modules import analytics, chatbot_rag, quiz_generator, summarizer, utils, vectorstore
 
 
 DOC_PATH = "data/latest_doc.txt"
@@ -325,6 +322,8 @@ def render_auth_page(config) -> None:
 
 
 def handle_upload(config) -> None:
+    from modules import analytics, summarizer, utils, vectorstore
+
     uploaded_file = st.sidebar.file_uploader("Upload a document or dataset", type=["pdf", "txt", "csv", "json", "xlsx"])
     if not uploaded_file:
         return
@@ -334,6 +333,7 @@ def handle_upload(config) -> None:
 
     if filename.endswith((".pdf", ".txt")):
         try:
+            raw_saved_path = str(save_uploaded_file(uploaded_file, config.raw_dir))
             text = utils.extract_text_from_pdf(uploaded_file) if filename.endswith(".pdf") else uploaded_file.getvalue().decode("utf-8")
             with open(DOC_PATH, "w", encoding="utf-8") as file:
                 file.write(text)
@@ -348,7 +348,7 @@ def handle_upload(config) -> None:
             st.session_state.summary_result = None
             st.session_state.quiz_package = None
             st.session_state.chat_session_id = None
-            activity_metadata = {"filename": uploaded_file.name, "language": language, "topics": [file_topic]}
+            activity_metadata = {"filename": uploaded_file.name, "language": language, "topics": [file_topic], "raw_path": raw_saved_path}
             log_user_activity(user_id, file_topic, "document_uploaded", activity_metadata, config=config)
             log_event(user_id, "document_uploaded", activity_metadata, config=config, activity_type="document_upload", resource_id=str(document["id"]), metadata=activity_metadata, topics=[file_topic], session_id=str(document["id"]))
             st.sidebar.success("Document uploaded and indexed.")
@@ -360,7 +360,7 @@ def handle_upload(config) -> None:
         st.session_state.dataset_df = analytics.load_structured_data(uploaded_file)
         st.session_state.dataset_name = uploaded_file.name
         st.session_state.dataset_raw_path = str(save_uploaded_file(uploaded_file, config.raw_dir))
-        metadata = {"filename": uploaded_file.name, "topics": [file_topic]}
+        metadata = {"filename": uploaded_file.name, "topics": [file_topic], "raw_path": st.session_state.dataset_raw_path}
         log_user_activity(user_id, file_topic, "dataset_uploaded", metadata, config=config)
         log_event(user_id, "dataset_uploaded", metadata, config=config, activity_type="dataset_upload", metadata=metadata, topics=[file_topic])
         st.sidebar.success("Dataset uploaded and stored in the raw zone.")
@@ -386,6 +386,8 @@ def ensure_chat_session(config) -> int | None:
 
 
 def render_chatbot_sidebar(config) -> None:
+    from modules import chatbot_rag
+
     st.sidebar.markdown("## Chatbot")
     user_id = current_user_id()
     if not user_id:
@@ -485,6 +487,8 @@ def render_sidebar_shell(config) -> None:
 
 
 def render_summarizer_page(config) -> None:
+    from modules import summarizer
+
     st.header("Summarizer")
     doc_content = load_document_text()
     if not doc_content or not current_document_id():
@@ -565,6 +569,8 @@ def _is_correct_answer(question_data: dict[str, Any], user_answer: str | None) -
 
 
 def render_quiz_page(config) -> None:
+    from modules import quiz_generator
+
     st.header("Quiz")
     doc_content = load_document_text()
     if not doc_content or not current_document_id():
@@ -644,6 +650,8 @@ def render_quiz_page(config) -> None:
 
 
 def render_analytics_page(config) -> None:
+    from modules import analytics
+
     st.header("Activity Analytics")
     user_id = current_user_id()
     users_df = get_users_df(config)
@@ -738,33 +746,64 @@ def render_analytics_page(config) -> None:
 
 
 def render_pipeline_page(config) -> None:
+    from modules import analytics
+    from learnmate_ai.spark_manager import spark_runtime_status
+
     st.header("Pipeline Ops")
     st.json(spark_runtime_status(config))
     st.json(database_status(config))
-    if st.button("Initialize Database"):
+    pipeline_cols = st.columns(3)
+    if pipeline_cols[0].button("Initialize Database"):
         initialize_database_schema(config)
         st.success("Database initialized.")
-    if st.button("Run Spark Batch Pipeline"):
+    if pipeline_cols[1].button("Run Spark Batch Pipeline"):
         try:
+            from batch_processing.big_data_pipeline import run_batch_pipeline
+
             report = run_batch_pipeline(config)
             st.session_state.pipeline_report = report
             st.session_state.pipeline_summary = analytics.summarize_pipeline_report(report)
             st.success("Spark batch pipeline completed.")
         except Exception as exc:
             st.error(f"Spark pipeline failed: {exc}")
-    if st.button("Persist Report To Database"):
+    if pipeline_cols[2].button("Persist Report To Database"):
         if not st.session_state.pipeline_report:
             st.warning("Run the Spark pipeline first.")
         else:
             result = persist_pipeline_report(st.session_state.pipeline_report, config)
             st.success(f"Pipeline metadata stored with event id {result['run_id']}.")
     if st.session_state.pipeline_report:
-        st.json(st.session_state.pipeline_report)
+        report = st.session_state.pipeline_report
+        st.markdown("### Pipeline Summary")
         if st.session_state.pipeline_summary:
             st.markdown(st.session_state.pipeline_summary)
+        metric_cols = st.columns(3)
+        metric_cols[0].metric("Processed Records", report.get("records_processed", 0))
+        metric_cols[1].metric("Log Records", report.get("log_records_ingested", 0))
+        metric_cols[2].metric("DB Records", report.get("database_records_ingested", 0))
+        if report.get("bronze_paths"):
+            st.markdown("### Bronze Zone")
+            st.json(report["bronze_paths"])
+        if report.get("silver_paths"):
+            st.markdown("### Silver Zone")
+            st.json(report["silver_paths"])
+        if report.get("gold_paths"):
+            st.markdown("### Gold Zone")
+            st.json(report["gold_paths"])
+        if report.get("topic_metrics_preview"):
+            st.markdown("### Gold Topic Metrics")
+            st.dataframe(pd.DataFrame(report["topic_metrics_preview"]), width="stretch")
+        if report.get("user_engagement_preview"):
+            st.markdown("### Gold User Engagement")
+            st.dataframe(pd.DataFrame(report["user_engagement_preview"]), width="stretch")
+        if report.get("daily_activity_preview"):
+            st.markdown("### Gold Daily Activity")
+            st.dataframe(pd.DataFrame(report["daily_activity_preview"]), width="stretch")
 
 
 def main() -> None:
+    from modules import utils
+
     st.set_page_config(page_title="LearnMate AI", layout="wide")
     inject_theme()
     utils.ensure_directory("data")

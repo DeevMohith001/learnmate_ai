@@ -19,33 +19,35 @@ def start_streaming_pipeline(
     output_dir: Path | None = None,
     checkpoint_dir: Path | None = None,
 ):
-    """Start a structured streaming job that aggregates topic metrics from JSON logs."""
+    """Start a structured streaming job over mirrored app events for real-time topic and engagement metrics."""
     if F is None:
         raise RuntimeError("PySpark is unavailable. Install dependencies before running structured streaming.")
 
     app_config = ensure_data_directories(config or get_config())
     spark = get_spark_session(app_config)
     streaming_source = Path(source_dir or app_config.streaming_input_dir)
-    streaming_output = Path(output_dir or (app_config.streaming_output_dir / "topic_metrics"))
-    streaming_checkpoint = Path(checkpoint_dir or (app_config.checkpoint_dir / "topic_metrics"))
+    streaming_output = Path(output_dir or (app_config.streaming_output_dir / "event_metrics"))
+    streaming_checkpoint = Path(checkpoint_dir or (app_config.checkpoint_dir / "event_metrics"))
     streaming_source.mkdir(parents=True, exist_ok=True)
     streaming_output.mkdir(parents=True, exist_ok=True)
     streaming_checkpoint.mkdir(parents=True, exist_ok=True)
 
     stream_df = (
         spark.readStream.schema(LOG_SCHEMA)
-        .option("maxFilesPerTrigger", 1)
+        .option("maxFilesPerTrigger", 10)
         .json(str(streaming_source))
         .withColumn("event_timestamp", F.to_timestamp("timestamp"))
+        .withColumn("event_date", F.to_date("event_timestamp"))
     )
 
     metrics_df = (
         stream_df.filter(F.col("topic").isNotNull())
-        .groupBy("topic")
+        .groupBy("event_date", "topic")
         .agg(
             F.round(F.avg("score"), 2).alias("avg_score"),
             F.sum(F.when(F.col("score").isNotNull(), F.lit(1)).otherwise(F.lit(0))).alias("attempts"),
             F.count("*").alias("events"),
+            F.countDistinct("user_id").alias("active_users"),
         )
         .withColumn(
             "difficulty_score",

@@ -14,9 +14,9 @@ from learnmate_ai.config import get_config
 
 
 def main() -> None:
-    """Run the Spark batch pipeline over the JSON log lake."""
-    parser = argparse.ArgumentParser(description="Run the LearnMate Spark log pipeline.")
-    parser.add_argument("--persist-mysql", action="store_true", help="Persist pipeline metadata to MySQL")
+    """Run the end-to-end Spark pipeline over logs plus the operational app database."""
+    parser = argparse.ArgumentParser(description="Run the LearnMate end-to-end Spark big data pipeline.")
+    parser.add_argument("--persist-database", action="store_true", help="Persist pipeline metadata to the application database")
     parser.add_argument("--show-report", action="store_true", help="Print the generated pipeline report")
     args = parser.parse_args()
 
@@ -26,7 +26,7 @@ def main() -> None:
     if args.show_report:
         print(report)
 
-    if args.persist_mysql:
+    if args.persist_database:
         initialize_database_schema(config)
         persisted = persist_pipeline_report(report, config)
         print(persisted)

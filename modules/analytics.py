@@ -8,7 +8,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from analytics.analytics import dashboard_metrics, hardest_topics, recent_user_history, top_performing_students, trend_analysis, weak_areas_per_user
 from modules.llama_model import generate_llm_response, llm_is_available
 from modules.utils import clean_token
 
@@ -20,6 +19,12 @@ STOP_WORDS = {
     "about", "into", "than", "then", "them", "they", "their", "you", "your",
     "we", "our", "can", "could", "should", "would", "may", "might", "not",
 }
+
+
+def _analytics_backend():
+    from analytics import analytics as analytics_backend
+
+    return analytics_backend
 
 
 def load_structured_data(uploaded_file) -> pd.DataFrame:
@@ -218,28 +223,28 @@ def summarize_pipeline_report(report: dict[str, Any]) -> str:
 
 
 def spark_dashboard_metrics(limit: int = 10) -> dict[str, pd.DataFrame]:
-    metrics = dashboard_metrics(limit=limit)
+    metrics = _analytics_backend().dashboard_metrics(limit=limit)
     return {key: pd.DataFrame(value) for key, value in metrics.items()}
 
 
 def spark_hardest_topics(limit: int = 10) -> pd.DataFrame:
-    return pd.DataFrame(hardest_topics(limit=limit))
+    return pd.DataFrame(_analytics_backend().hardest_topics(limit=limit))
 
 
 def spark_weak_areas(limit: int = 20) -> pd.DataFrame:
-    return pd.DataFrame(weak_areas_per_user(limit=limit))
+    return pd.DataFrame(_analytics_backend().weak_areas_per_user(limit=limit))
 
 
 def spark_top_students(limit: int = 10) -> pd.DataFrame:
-    return pd.DataFrame(top_performing_students(limit=limit))
+    return pd.DataFrame(_analytics_backend().top_performing_students(limit=limit))
 
 
 def spark_trends() -> pd.DataFrame:
-    return pd.DataFrame(trend_analysis())
+    return pd.DataFrame(_analytics_backend().trend_analysis())
 
 
 def recent_activity_history(user_id: str) -> dict[str, pd.DataFrame]:
-    history = recent_user_history(user_id)
+    history = _analytics_backend().recent_user_history(user_id)
     return {key: pd.DataFrame(value) for key, value in history.items()}
 
 

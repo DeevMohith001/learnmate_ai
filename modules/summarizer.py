@@ -17,23 +17,91 @@ STOP_WORDS = {
     "their", "there", "into", "than", "then", "such", "also", "have", "been", "being", "can", "will",
 }
 MODE_ALIASES = {
-    "brief": "bullet_summary",
-    "detailed": "concept_explanation",
+    "bullet_summary": "bullet_points",
+    "revision": "brief",
+    "exam_notes": "detailed",
+    "concept_explanation": "detailed",
 }
 MODE_PROMPTS = {
-    "bullet_summary": "Create a crisp bullet summary covering the full document.",
-    "concept_explanation": "Explain the core concepts clearly like a teacher, with short headings and short explanations.",
-    "exam_notes": "Convert the material into exam-ready notes with headings, key points, and facts to remember.",
-    "revision": "Create a 1-minute revision sheet with only the most important points.",
+    "brief": "Summarize each relevant page in 1 to 2 clear lines.",
+    "detailed": "Summarize each relevant page in 4 to 5 clear lines, focusing only on the important ideas.",
+    "bullet_points": "Create crisp bullet points covering the most important parts of the document.",
 }
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 STAT_PATTERN = re.compile(r"\b\d+(?:\.\d+)?%?\b")
 DEFINITION_PATTERN = re.compile(r"\b(?:is|refers to|defined as|means)\b", re.IGNORECASE)
 TOPIC_PATTERN = re.compile(r"\b[A-Z][A-Za-z0-9+-]{2,}(?:\s+[A-Z][A-Za-z0-9+-]{2,})*\b")
+PAGE_PATTERN = re.compile(r"(?:^|\n)\[Page\s+(\d+)\]\s*\n", re.IGNORECASE)
 
 
 def normalize_mode(mode: str) -> str:
     return MODE_ALIASES.get(mode, mode)
+
+
+def _analysis_ready_content(content: str) -> str:
+    return PAGE_PATTERN.sub("\n", content).strip()
+
+
+def _extract_pages(content: str) -> list[dict[str, Any]]:
+    matches = list(PAGE_PATTERN.finditer(content))
+    if not matches:
+        stripped = content.strip()
+        return [{"page_number": 1, "text": stripped}] if stripped else []
+
+    pages: list[dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        page_number = int(match.group(1))
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        page_text = content[start:end].strip()
+        if page_text:
+            pages.append({"page_number": page_number, "text": page_text})
+    return pages
+
+
+def _is_relevant_page(page_text: str) -> bool:
+    words = page_text.split()
+    sentences = _split_sentences(page_text)
+    if len(words) < 35:
+        return False
+    if len(sentences) < 2 and len(words) < 60:
+        return False
+    alnum_ratio = sum(char.isalnum() for char in page_text) / max(len(page_text), 1)
+    return alnum_ratio >= 0.55
+
+
+def _select_relevant_pages(content: str) -> list[dict[str, Any]]:
+    pages = _extract_pages(content)
+    relevant = [page for page in pages if _is_relevant_page(page["text"])]
+    if relevant:
+        return relevant
+    return sorted(pages, key=lambda page: len(page["text"].split()), reverse=True)[: max(1, min(5, len(pages)))]
+
+
+def _page_lines(page_text: str, count: int) -> list[str]:
+    tfidf_lines = extractive_tfidf_summary(page_text, count + 2)
+    textrank_lines = extractive_textrank_summary(page_text, count + 2)
+    merged: list[str] = []
+    for line in tfidf_lines + textrank_lines:
+        if line not in merged:
+            merged.append(line)
+        if len(merged) >= count:
+            break
+    return merged
+
+
+def _pagewise_summary(content: str, detail_level: str) -> tuple[str, dict[str, Any]]:
+    relevant_pages = _select_relevant_pages(content)
+    line_count = 2 if detail_level == "brief" else 5
+    rendered_pages: list[dict[str, Any]] = []
+    blocks: list[str] = []
+    for page in relevant_pages:
+        lines = _page_lines(page["text"], line_count)
+        if not lines:
+            continue
+        rendered_pages.append({"page": page["page_number"], "summary": lines})
+        blocks.append(f"### Page {page['page_number']}\n" + "\n".join(f"- {line}" for line in lines))
+    return "\n\n".join(blocks), {"page_summaries": rendered_pages, "page_count": len(rendered_pages)}
 
 
 def detect_language(text: str) -> str:
@@ -47,7 +115,8 @@ def detect_language(text: str) -> str:
 
 
 def _split_sentences(content: str) -> list[str]:
-    return [sentence.strip() for sentence in SENTENCE_SPLIT.split(content.strip()) if len(sentence.split()) >= 5]
+    prepared = _analysis_ready_content(content)
+    return [sentence.strip() for sentence in SENTENCE_SPLIT.split(prepared) if len(sentence.split()) >= 5]
 
 
 def _tokenize(sentence: str) -> list[str]:
@@ -205,20 +274,11 @@ def _compose_prompt(mode: str, content: str) -> str:
 
 def _abstractive_summary(content: str, mode: str) -> str:
     if not llm_is_available():
+        if mode in {"brief", "detailed"}:
+            summary_text, _ = _pagewise_summary(content, mode)
+            return summary_text
         hierarchy = build_hierarchical_summary(content, "tfidf")
-        if mode == "revision":
-            bullets = hierarchy["document_level"][:6]
-            return "\n".join(f"- {bullet}" for bullet in bullets)
-        if mode == "exam_notes":
-            lines = ["### Exam Notes"]
-            lines.extend(f"- {bullet}" for bullet in hierarchy["document_level"][:10])
-            return "\n".join(lines)
-        if mode == "concept_explanation":
-            sections = []
-            for item in hierarchy["topic_level"][:4]:
-                sections.append(f"### {item['topic']}\n- " + "\n- ".join(item["summary"]))
-            return "\n\n".join(sections) if sections else "\n".join(f"- {bullet}" for bullet in hierarchy["document_level"][:8])
-        return "\n".join(f"- {bullet}" for bullet in hierarchy["document_level"][:8])
+        return "\n".join(f"- {bullet}" for bullet in hierarchy["document_level"][:10])
 
     chunk_summaries = []
     for chunk in chunk_text(content, length=2200, overlap=300):
@@ -250,42 +310,25 @@ def _format_topic_sections(topic_sections: list[dict[str, Any]], mode: str) -> s
 
 
 def _format_summary_text(hierarchy: dict[str, Any], mode: str, method: str) -> str:
-    topic_sections = hierarchy.get("topic_level", [])
     document_lines = hierarchy.get("document_level", [])
-    section_level = hierarchy.get("section_level", [])
+    if mode in {"brief", "detailed"}:
+        return ""
+    return "\n".join(f"- {line}" for line in document_lines[:10])
 
-    if mode == "revision":
-        lines = document_lines[:6]
-        return "\n".join(f"- {line}" for line in lines)
 
-    if mode == "exam_notes":
-        output = ["### Exam Notes"]
-        if topic_sections:
-            output.append(_format_topic_sections(topic_sections[:5], mode))
-        if document_lines:
-            output.append("### Quick Facts\n" + "\n".join(f"- {line}" for line in document_lines[:6]))
-        return "\n\n".join(output)
-
-    if mode == "concept_explanation":
-        if topic_sections:
-            return _format_topic_sections(topic_sections[:5], mode)
-        return "\n".join(f"- {line}" for line in document_lines[:8])
-
-    output = []
-    if document_lines:
-        output.append("\n".join(f"- {line}" for line in document_lines[:8]))
-    if section_level:
-        output.append(
-            "### Coverage Across The Document\n"
-            + "\n".join(
-                f"- Section {item['section']}: {item['summary'][0]}"
-                for item in section_level[: min(5, len(section_level))]
-                if item.get("summary")
-            )
-        )
-    if topic_sections and method != "textrank":
-        output.append("### Topics\n" + "\n".join(f"- {item['topic']}" for item in topic_sections[:6]))
-    return "\n\n".join(part for part in output if part.strip())
+def _hybrid_summary_text(content: str, mode: str) -> tuple[str, dict[str, Any]]:
+    if mode in {"brief", "detailed"}:
+        return _pagewise_summary(content, mode)
+    hierarchy = build_hierarchical_summary(content, "tfidf")
+    tfidf_lines = extractive_tfidf_summary(content, 10 if mode == "concept_explanation" else 8)
+    textrank_lines = extractive_textrank_summary(content, 8)
+    merged_lines: list[str] = []
+    for line in tfidf_lines + textrank_lines:
+        if line not in merged_lines:
+            merged_lines.append(line)
+    if merged_lines:
+        hierarchy["document_level"] = merged_lines[:10]
+    return _format_summary_text(hierarchy, mode, "tfidf"), hierarchy
 
 
 def _translate_if_needed(text: str, source_language: str, target_language: str) -> str:
@@ -299,13 +342,16 @@ def _translate_if_needed(text: str, source_language: str, target_language: str) 
 
 def summarize_document(user_id: int | str, document_id: int | str, content: str, *, mode: str = "bullet_summary", method: str = "abstractive", target_language: str = "en", config=None) -> dict[str, Any]:
     mode = normalize_mode(mode)
+    if method == "auto":
+        method = "abstractive" if llm_is_available() else "hybrid"
     cached = get_cached_summary(user_id, document_id, method, mode, target_language, config)
     if cached is not None:
+        hierarchy = json.loads(cached.get("hierarchy_json") or "{}")
         return {
             "summary_text": cached["summary_text"],
             "key_insights": json.loads(cached.get("key_insights") or "[]"),
-            "hierarchy": json.loads(cached.get("hierarchy_json") or "{}"),
-            "topics": json.loads(cached.get("hierarchy_json") or "{}").get("topic_level", []),
+            "hierarchy": hierarchy,
+            "topics": [item["topic"] for item in hierarchy.get("topic_level", [])],
             "important_sentences": important_sentences(content, 5),
             "method": method,
             "mode": mode,
@@ -313,12 +359,16 @@ def summarize_document(user_id: int | str, document_id: int | str, content: str,
             "cached": True,
         }
     source_language = detect_language(content)
-    hierarchy = build_hierarchical_summary(content, method if method in {"tfidf", "textrank"} else "tfidf")
     if method == "tfidf":
+        hierarchy = build_hierarchical_summary(content, method)
         summary_text = _format_summary_text(hierarchy, mode, method)
     elif method == "textrank":
+        hierarchy = build_hierarchical_summary(content, method)
         summary_text = _format_summary_text(hierarchy, mode, method)
+    elif method == "hybrid":
+        summary_text, hierarchy = _hybrid_summary_text(content, mode)
     else:
+        hierarchy = build_hierarchical_summary(content, "tfidf")
         summary_text = _abstractive_summary(content, mode)
     key_insights = extract_key_insights(content)
     summary_text = _translate_if_needed(summary_text, source_language, target_language)
@@ -341,5 +391,8 @@ def summarize_text(content: str, mode: str = "bullet_summary") -> str:
     mode = normalize_mode(mode)
     if not content.strip():
         return "No text was found to summarize."
+    if mode in {"brief", "detailed"}:
+        summary_text, _ = _pagewise_summary(content, mode)
+        return summary_text
     hierarchy = build_hierarchical_summary(content, "tfidf")
     return _format_summary_text(hierarchy, mode, "tfidf")

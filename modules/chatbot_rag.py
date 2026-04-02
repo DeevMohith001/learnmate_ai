@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 from statistics import mean
 from typing import Any
 
 from modules.llama_model import generate_llm_response, llm_is_available
+from modules.utils import clean_token
 from modules.vectorstore import retrieve_relevant_chunks_with_scores
-from modules.summarizer import important_sentences
 
 
 ANSWER_MODE_INSTRUCTIONS = {
@@ -14,27 +15,109 @@ ANSWER_MODE_INSTRUCTIONS = {
     "step_by_step": "Answer step by step with numbered reasoning.",
 }
 
+GENERIC_QUERY_TOKENS = {
+    "the", "a", "an", "of", "for", "about", "project", "document", "page",
+    "explain", "tell", "me", "what", "is", "are", "how",
+}
+NOISE_PATTERNS = [
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in [
+        r"\broll\s*no\b",
+        r"\bteam\s+members?\b",
+        r"\bmembers?\b",
+        r"\bcourse\b",
+        r"\bbtech\b",
+        r"\byear\b",
+        r"\bsubmitted\s+by\b",
+        r"\bdepartment\b",
+        r"\bstudent\b",
+        r"\bguide\b",
+        r"\bmentor\b",
+        r"\bname\s*:",
+    ]
+]
+SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+KEYWORD_EXPANSIONS = {
+    "workflow": {"workflow", "process", "pipeline", "steps", "architecture", "system", "flow"},
+    "architecture": {"architecture", "system", "modules", "components", "design", "flow"},
+    "summary": {"summary", "overview", "introduction", "abstract"},
+}
 
-def _lexical_answer(context_chunks: list[dict[str, Any]], answer_mode: str) -> str:
+
+def _query_terms(query: str) -> set[str]:
+    tokens = {clean_token(token) for token in query.split() if clean_token(token)}
+    expanded = set(tokens)
+    for token in list(tokens):
+        expanded.update(KEYWORD_EXPANSIONS.get(token, set()))
+    return {token for token in expanded if token and token not in GENERIC_QUERY_TOKENS}
+
+
+def _split_sentences(text: str) -> list[str]:
+    normalized = text.replace("\n", " ")
+    return [part.strip() for part in SENTENCE_SPLIT.split(normalized) if len(part.split()) >= 5]
+
+
+def _is_noise_sentence(sentence: str) -> bool:
+    lowered = sentence.lower()
+    if sentence.count("(") >= 2 and any(char.isdigit() for char in sentence):
+        return True
+    if lowered.startswith("[page"):
+        return True
+    return any(pattern.search(sentence) for pattern in NOISE_PATTERNS)
+
+
+def _score_line(query: str, line: str) -> float:
+    query_tokens = _query_terms(query)
+    line_tokens = {clean_token(token) for token in line.split() if clean_token(token)}
+    if not line_tokens:
+        return -5.0
+    overlap = len(query_tokens & line_tokens)
+    phrase_bonus = 2.5 if query.strip().lower() in line.lower() else 0.0
+    density_bonus = overlap / max(len(query_tokens), 1)
+    noise_penalty = 5.0 if _is_noise_sentence(line) else 0.0
+    short_penalty = 1.5 if len(line.split()) < 6 else 0.0
+    return overlap * 2.0 + density_bonus + phrase_bonus - noise_penalty - short_penalty
+
+
+def _candidate_sentences(query: str, context_chunks: list[dict[str, Any]]) -> list[str]:
+    candidates: list[tuple[float, str]] = []
+    seen: set[str] = set()
+    for chunk in context_chunks[: min(6, len(context_chunks))]:
+        for sentence in _split_sentences(chunk["text"]):
+            cleaned = sentence.strip()
+            if cleaned in seen:
+                continue
+            seen.add(cleaned)
+            score = _score_line(query, cleaned)
+            if score > 0:
+                candidates.append((score, cleaned))
+    ranked = [sentence for _, sentence in sorted(candidates, key=lambda item: item[0], reverse=True)]
+    if not ranked:
+        fallback: list[str] = []
+        for chunk in context_chunks[: min(4, len(context_chunks))]:
+            for sentence in _split_sentences(chunk["text"]):
+                if not _is_noise_sentence(sentence) and len(sentence.split()) >= 6:
+                    fallback.append(sentence)
+            if len(fallback) >= 4:
+                break
+        ranked = fallback
+    return ranked[:6]
+
+
+def _lexical_answer(query: str, context_chunks: list[dict[str, Any]], answer_mode: str) -> str:
     if not context_chunks:
         return "I could not find enough evidence in the uploaded document."
-    combined_context = " ".join(chunk["text"].replace("\n", " ") for chunk in context_chunks[: min(5, len(context_chunks))])
-    evidence_lines = [line for line in important_sentences(combined_context, limit=6) if len(line.split()) >= 6]
+    evidence_lines = _candidate_sentences(query, context_chunks)
     if not evidence_lines:
-        evidence_lines = [chunk["text"][:320].strip() for chunk in context_chunks[: min(4, len(context_chunks))]]
-    lines = []
-    for index, excerpt in enumerate(evidence_lines[:4], start=1):
-        if answer_mode == "step_by_step":
-            lines.append(f"{index}. {excerpt}")
-        elif answer_mode == "short":
-            lines.append(excerpt)
-        else:
-            lines.append(f"- {excerpt}")
+        return "I could not find a clear answer for that exact question in the uploaded document. Try asking with a more specific module, workflow, or feature name."
     if answer_mode == "short":
-        return "\n\n".join(lines[:2])
+        return " ".join(evidence_lines[:2])
     if answer_mode == "step_by_step":
-        return "Here is the strongest evidence I found in the document:\n" + "\n".join(lines)
-    return "Based on the uploaded document, here are the most relevant points:\n" + "\n".join(lines)
+        steps = [f"{index}. {excerpt}" for index, excerpt in enumerate(evidence_lines[:4], start=1)]
+        return "Here is the exact workflow or explanation from the document:\n" + "\n".join(steps)
+    if len(evidence_lines) == 1:
+        return evidence_lines[0]
+    return " ".join(evidence_lines[:3])
 
 
 def _follow_up_suggestions(question: str) -> list[str]:
@@ -64,13 +147,14 @@ def chatbot_respond(question: str, history: list[dict[str, str]] | None = None, 
         }
 
     avg_confidence = round(mean(item["confidence"] for item in context_chunks), 2)
-    context = "\n\n".join(item["text"] for item in context_chunks)
+    filtered_sentences = _candidate_sentences(cleaned_question, context_chunks)
+    context = "\n".join(filtered_sentences[:8]) if filtered_sentences else "\n\n".join(item["text"] for item in context_chunks[:4])
     recent_history = history[-12:]
     history_text = "\n".join(f"{item['role'].upper()}: {item['content']}" for item in recent_history)
     answer_instruction = ANSWER_MODE_INSTRUCTIONS.get(answer_mode, ANSWER_MODE_INSTRUCTIONS["teacher"])
 
     if not llm_is_available():
-        answer = _lexical_answer(context_chunks, answer_mode)
+        answer = _lexical_answer(cleaned_question, context_chunks, answer_mode)
         if avg_confidence < 0.2:
             answer = "I am not fully confident, but this is the strongest evidence I found in the document:\n\n" + answer
         return {"answer": answer, "confidence": avg_confidence, "sources": context_chunks, "suggested_followups": _follow_up_suggestions(cleaned_question)}
@@ -91,7 +175,9 @@ CONTEXT:
 QUESTION:
 {cleaned_question}
 
-Return a concise but helpful answer.
+Answer only the question asked. Ignore title-page details, member names, roll numbers, and unrelated front matter unless the user explicitly asks for them.
+Use only the context provided. Do not guess or add extra information.
+Return a concise but helpful answer in 2 to 4 sentences.
 """
     answer = generate_llm_response(prompt, max_tokens=320, temperature=0.25)
     if avg_confidence < 0.2:

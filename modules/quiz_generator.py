@@ -26,6 +26,18 @@ def _important_words(sentence: str) -> list[str]:
     return [word for word in cleaned_words if len(word) > 4 and word.lower() not in STOP_WORDS]
 
 
+def _sentence_clauses(sentence: str) -> list[str]:
+    clauses = [part.strip(" ,;:-") for part in re.split(r",|;|:|\band\b", sentence) if part.strip()]
+    return [clause for clause in clauses if len(clause.split()) >= 3]
+
+
+def _concise_fact(sentence: str) -> str:
+    clauses = _sentence_clauses(sentence)
+    if clauses:
+        return clauses[0].rstrip(".") + "."
+    return sentence.strip().rstrip(".") + "."
+
+
 def _infer_difficulty(user_id: int | str | None, config=None) -> str:
     if not user_id:
         return "medium"
@@ -71,6 +83,7 @@ def _fallback_question(sentence: str, question_type: str, rng: random.Random, ke
     answer_word = max(keywords, key=len)
     distractors = [word for word in keyword_pool if word.lower() != answer_word.lower()]
     rng.shuffle(distractors)
+    concise_fact = _concise_fact(sentence)
 
     if question_type == "true_false":
         statement = sentence
@@ -103,28 +116,34 @@ def _fallback_question(sentence: str, question_type: str, rng: random.Random, ke
     if question_type == "short_answer":
         return {
             "type": "short_answer",
-            "question": f"Explain the role of '{answer_word}' in this statement: {sentence}",
+            "question": f"Explain how '{answer_word}' is used in the document.",
             "options": [],
-            "answer": sentence,
+            "answer": concise_fact,
             "difficulty": difficulty,
             "skill_level": "advanced" if difficulty == "hard" else "intermediate",
-            "explanation": sentence,
+            "explanation": concise_fact,
             "quality_score": 0.7,
         }
 
-    options = [answer_word, *distractors[:3]]
+    correct_option = concise_fact
+    option_pool = [correct_option]
+    for distractor in distractors[:3]:
+        option_pool.append(f"It is mainly related to {distractor}.")
+    while len(option_pool) < 4:
+        option_pool.append(f"It is mainly related to Concept {len(option_pool)}.")
+    options = option_pool[:4]
     while len(options) < 4:
         options.append(f"Concept{len(options) + 1}")
     rng.shuffle(options)
-    answer_index = options.index(answer_word)
+    answer_index = options.index(correct_option)
     return {
         "type": "multiple_choice",
-        "question": f"In the document context, complete the statement: {re.sub(rf'\\b{re.escape(answer_word)}\\b', '_____', sentence, count=1)}",
+        "question": f"What does the document state about {answer_word}?",
         "options": options,
         "answer": options[answer_index],
         "difficulty": difficulty,
         "skill_level": "intermediate" if difficulty == "medium" else difficulty,
-        "explanation": sentence,
+        "explanation": concise_fact,
         "quality_score": 0.78,
     }
 

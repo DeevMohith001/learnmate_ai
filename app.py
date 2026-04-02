@@ -54,14 +54,164 @@ from modules import analytics, chatbot_rag, quiz_generator, summarizer, utils, v
 
 
 DOC_PATH = "data/latest_doc.txt"
-SUMMARY_METHODS = ["abstractive", "tfidf", "textrank"]
-SUMMARY_MODES = ["bullet_summary", "concept_explanation", "exam_notes", "revision"]
-LANGUAGE_OPTIONS = ["en", "hi", "same"]
+SUMMARY_MODES = ["brief", "detailed", "bullet_points"]
 CHAT_ANSWER_MODES = {
     "Explain Like Teacher": "teacher",
     "Short Answer": "short",
     "Step-by-Step": "step_by_step",
 }
+
+
+def inject_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background: linear-gradient(180deg, #f7fbff 0%, #eef7f1 100%);
+            color: #1f2937;
+        }
+        .stApp, .stApp p, .stApp li, .stApp span, .stApp label, .stApp div {
+            color: #0f172a;
+        }
+        [data-testid="stHeader"] {
+            background: #f8fbff;
+        }
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #ffffff 0%, #f3fbf6 100%);
+            border-right: 1px solid rgba(15, 23, 42, 0.08);
+        }
+        [data-testid="stSidebar"] * {
+            color: #0f172a !important;
+        }
+        .stButton > button, .stDownloadButton > button {
+            background: linear-gradient(135deg, #0f766e 0%, #38bdf8 100%);
+            color: #ffffff !important;
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(14, 116, 144, 0.18);
+        }
+        .stButton > button *, .stDownloadButton > button * {
+            color: #ffffff !important;
+            fill: #ffffff !important;
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover {
+            filter: brightness(1.04);
+        }
+        .stSelectbox label, .stRadio label, .stTextArea label, .stTextInput label, .stSlider label, .stFileUploader label {
+            color: #0f172a !important;
+            font-weight: 600;
+        }
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div,
+        .stTextInput input,
+        .stTextArea textarea,
+        .stNumberInput input {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border: 1px solid #cbd5e1 !important;
+        }
+        .stTextArea textarea::placeholder,
+        .stTextInput input::placeholder {
+            color: #64748b !important;
+        }
+        div[role="radiogroup"] label,
+        div[data-testid="stRadio"] label,
+        div[data-testid="stCheckbox"] label,
+        div[data-testid="stFileUploader"] small,
+        div[data-testid="stFileUploader"] span,
+        div[data-testid="stFileUploader"] p {
+            color: #0f172a !important;
+            opacity: 1 !important;
+        }
+        div[data-testid="stRadio"] p {
+            color: #0f172a !important;
+        }
+        div[data-testid="stFileUploader"] section {
+            background: #f8fafc !important;
+            border: 1px solid #cbd5e1 !important;
+            border-radius: 14px !important;
+        }
+        div[data-testid="stFileUploaderDropzone"] {
+            background: #f8fafc !important;
+            border: 1px solid #cbd5e1 !important;
+        }
+        div[data-testid="stFileUploaderDropzone"] * {
+            color: #0f172a !important;
+            fill: #0f172a !important;
+            opacity: 1 !important;
+        }
+        div[data-testid="stFileUploaderDropzoneInstructions"] span,
+        div[data-testid="stFileUploaderDropzoneInstructions"] small,
+        div[data-testid="stFileUploaderDropzoneInstructions"] p {
+            color: #0f172a !important;
+        }
+        div[data-testid="stBaseButton-secondary"],
+        button[kind="secondary"],
+        button[data-testid="stBaseButton-secondary"] {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border: 1px solid #94a3b8 !important;
+        }
+        div[data-testid="stBaseButton-secondary"] *,
+        button[kind="secondary"] *,
+        button[data-testid="stBaseButton-secondary"] * {
+            color: #0f172a !important;
+            fill: #0f172a !important;
+        }
+        div[data-testid="stMarkdownContainer"] p,
+        div[data-testid="stMarkdownContainer"] li,
+        div[data-testid="stMarkdownContainer"] span {
+            color: #0f172a !important;
+        }
+        [data-testid="stSidebarNav"] {
+            color: #0f172a !important;
+        }
+        .stSuccess, .stInfo, .stWarning, .stError {
+            color: #0f172a !important;
+        }
+        .stSuccess {
+            background: #dcfce7 !important;
+        }
+        .stInfo {
+            background: #dbeafe !important;
+        }
+        .stWarning {
+            background: #fef3c7 !important;
+        }
+        .stError {
+            background: #fee2e2 !important;
+        }
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {
+            color: #0f172a;
+        }
+        div[data-testid="stMetric"] {
+            background: rgba(255, 255, 255, 0.72);
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            border-radius: 16px;
+            padding: 10px 14px;
+        }
+        div[data-testid="stDataFrame"] {
+            background: rgba(255, 255, 255, 0.74);
+            border-radius: 14px;
+            padding: 4px;
+        }
+        .block-container {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+        }
+        section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 10px;
+            padding: 4px 8px;
+            margin-bottom: 2px;
+        }
+        section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
+            background: #ffffff !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def init_state() -> None:
@@ -341,25 +491,22 @@ def render_summarizer_page(config) -> None:
         st.info("Upload a PDF or TXT document to use the summarizer.")
         return
     st.caption(f"Active document: {st.session_state.current_document_name}")
-    controls = st.columns(3)
-    mode = controls[0].selectbox("Summary style", SUMMARY_MODES, format_func=lambda value: value.replace("_", " ").title())
-    method = controls[1].selectbox("Method", SUMMARY_METHODS)
-    target_language = controls[2].selectbox("Output language", LANGUAGE_OPTIONS, index=0)
+    mode = st.selectbox("Summary style", SUMMARY_MODES, format_func=lambda value: value.replace("_", " ").title())
     if st.button("Summarize Document"):
         with st.spinner("Building summary..."):
-            requested_language = summarizer.detect_language(doc_content) if target_language == "same" else target_language
+            requested_language = summarizer.detect_language(doc_content)
             st.session_state.summary_result = summarizer.summarize_document(
                 current_user_id(),
                 current_document_id(),
                 doc_content,
                 mode=mode,
-                method=method,
+                method="auto",
                 target_language=requested_language,
                 config=config,
             )
             study_minutes = estimate_study_minutes(doc_content)
             engagement_score = round(min(1.0, study_minutes / max(len(doc_content.split()) / 200, 1)), 2)
-            log_user_activity(current_user_id(), current_document_topic(), "summary_requested", {"mode": mode, "method": method}, config=config)
+            log_user_activity(current_user_id(), current_document_topic(), "summary_requested", {"mode": mode, "method": "auto"}, config=config)
             log_study_session(
                 current_user_id(),
                 current_subject(),
@@ -373,11 +520,11 @@ def render_summarizer_page(config) -> None:
             log_event(
                 current_user_id(),
                 "summary_requested",
-                {"method": method, "mode": mode},
+                {"method": "auto", "mode": mode},
                 config=config,
                 activity_type="summary_read",
                 resource_id=str(current_document_id()),
-                metadata={"method": method, "mode": mode},
+                metadata={"method": "auto", "mode": mode},
                 duration_seconds=study_minutes * 60,
                 engagement_score=engagement_score,
                 topics=[current_document_topic()],
@@ -388,27 +535,12 @@ def render_summarizer_page(config) -> None:
     if result:
         if result.get("cached"):
             st.caption("Loaded from summary cache.")
+        hierarchy = result.get("hierarchy", {})
+        page_count = hierarchy.get("page_count")
+        if page_count:
+            st.caption(f"Pages covered: {page_count}")
         st.markdown("### Summary")
         st.markdown(result["summary_text"])
-        if result.get("topics"):
-            st.markdown("### Main Topics")
-            st.write(", ".join(result["topics"]))
-        if result.get("important_sentences"):
-            st.markdown("### Most Important Lines")
-            for line in result["important_sentences"]:
-                st.markdown(f"- {line}")
-        insights_df = pd.DataFrame(result.get("key_insights", []))
-        if not insights_df.empty:
-            st.markdown("### Key Insights")
-            st.dataframe(insights_df, width="stretch")
-        hierarchy = result.get("hierarchy", {})
-        if hierarchy.get("section_level"):
-            st.markdown("### Hierarchical View")
-            st.dataframe(pd.DataFrame(hierarchy["section_level"]), width="stretch")
-        if hierarchy.get("topic_level"):
-            st.markdown("### Topic-Wise Summary")
-            topic_rows = [{"topic": item["topic"], "summary": " ".join(item["summary"])} for item in hierarchy["topic_level"]]
-            st.dataframe(pd.DataFrame(topic_rows), width="stretch")
 
 
 def _render_question(index: int, question_data: dict[str, Any]):
@@ -634,6 +766,7 @@ def render_pipeline_page(config) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="LearnMate AI", layout="wide")
+    inject_theme()
     utils.ensure_directory("data")
     config = ensure_data_directories(get_config())
     initialize_database_schema(config)

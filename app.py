@@ -747,6 +747,12 @@ def render_analytics_page(config) -> None:
     if not spark_sections["hardest"].empty:
         st.markdown("### Log-Based Topic Difficulty")
         st.dataframe(spark_sections["hardest"], width="stretch")
+    if "recommendations" in spark_sections and not spark_sections["recommendations"].empty:
+        st.markdown("### Gold Recommendations")
+        st.dataframe(spark_sections["recommendations"], width="stretch")
+    if "top" in spark_sections and not spark_sections["top"].empty:
+        st.markdown("### Gold User Engagement")
+        st.dataframe(spark_sections["top"], width="stretch")
 
     st.markdown("### Export")
     export_table_name = st.selectbox("Export table", ["users", "documents", "summaries", "study_sessions", "quiz_results", "quiz_questions", "events"])
@@ -791,6 +797,10 @@ def render_pipeline_page(config) -> None:
         metric_cols[0].metric("Processed Records", report.get("records_processed", 0))
         metric_cols[1].metric("Log Records", report.get("log_records_ingested", 0))
         metric_cols[2].metric("DB Records", report.get("database_records_ingested", 0))
+        runtime_cols = st.columns(3)
+        runtime_cols[0].metric("Processing Seconds", report.get("processing_seconds", 0))
+        runtime_cols[1].metric("Records / Second", report.get("records_per_second", 0))
+        runtime_cols[2].metric("Scale", report.get("scale_classification", "unknown"))
         if report.get("bronze_paths"):
             st.markdown("### Bronze Zone")
             st.json(report["bronze_paths"])
@@ -809,6 +819,15 @@ def render_pipeline_page(config) -> None:
         if report.get("daily_activity_preview"):
             st.markdown("### Gold Daily Activity")
             st.dataframe(pd.DataFrame(report["daily_activity_preview"]), width="stretch")
+        if report.get("student_clusters_preview"):
+            st.markdown("### Student Clusters")
+            st.dataframe(pd.DataFrame(report["student_clusters_preview"]), width="stretch")
+        if report.get("performance_predictions_preview"):
+            st.markdown("### Performance Predictions")
+            st.dataframe(pd.DataFrame(report["performance_predictions_preview"]), width="stretch")
+        if report.get("learning_recommendations_preview"):
+            st.markdown("### Learning Recommendations")
+            st.dataframe(pd.DataFrame(report["learning_recommendations_preview"]), width="stretch")
 
 
 def main() -> None:

@@ -100,6 +100,23 @@ def retrieve_relevant_chunks_with_scores(
     with text_file.open("r", encoding="utf-8") as file:
         texts = json.load(file)
 
+    ranked_pairs = sorted(((text, _token_overlap_score(query, text)) for text in texts), key=lambda item: item[1], reverse=True)
+    strong_lexical = []
+    lexical_threshold = max(2.5, min(6.0, len([token for token in query.split() if clean_token(token)]) * 1.4))
+    for text, score in ranked_pairs[: max(k * 2, k)]:
+        if score >= lexical_threshold:
+            strong_lexical.append(
+                {
+                    "text": text,
+                    "score": round(float(score), 3),
+                    "confidence": round(min(0.98, 0.45 + score / 12), 2),
+                }
+            )
+        if len(strong_lexical) >= k:
+            break
+    if strong_lexical:
+        return strong_lexical
+
     embed_model = _get_embed_model()
     faiss = _get_faiss()
     if faiss is not None and embed_model is not None and index_file.exists():
@@ -116,7 +133,6 @@ def retrieve_relevant_chunks_with_scores(
         if results:
             return results
 
-    ranked_pairs = sorted(((text, _token_overlap_score(query, text)) for text in texts), key=lambda item: item[1], reverse=True)
     output = []
     for text, score in ranked_pairs[: max(k * 2, k)]:
         if score > 0:

@@ -12,6 +12,7 @@ except Exception:
 
 
 PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
+PAGE_MARKER = re.compile(r"(?:^|\s*)\[Page\s+\d+\]\s*", re.IGNORECASE)
 
 
 def ensure_directory(path: str) -> None:
@@ -45,6 +46,12 @@ def extract_text_from_pdf(uploaded_file: BinaryIO) -> str:
             return "\n\n".join(extracted_pages)
     except Exception as exc:
         raise ValueError(f"Could not extract text from the PDF: {exc}") from exc
+
+
+def strip_page_markers(text: str) -> str:
+    cleaned = PAGE_MARKER.sub("\n", text or "")
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def chunk_text(text: str, length: int = 1800, overlap: int = 250) -> list[str]:

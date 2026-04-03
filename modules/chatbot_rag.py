@@ -5,29 +5,27 @@ from statistics import mean
 from typing import Any
 
 from modules.llama_model import generate_llm_response, llm_is_available
-from modules.utils import clean_token
+from modules.utils import clean_token, strip_page_markers
 from modules.vectorstore import retrieve_relevant_chunks_with_scores
 
 
 ANSWER_MODE_INSTRUCTIONS = {
     "teacher": "Explain like a helpful teacher with clear concepts and simple reasoning.",
-    "short": "Give a short direct answer in 3 to 5 lines.",
+    "short": "Give a short direct answer in 2 to 4 lines.",
     "step_by_step": "Answer step by step with numbered reasoning.",
 }
 
 GENERIC_QUERY_TOKENS = {
-    "the", "a", "an", "of", "for", "about", "project", "document", "page",
-    "explain", "tell", "me", "what", "is", "are", "how",
+    "the", "a", "an", "of", "for", "about", "project", "document", "pdf", "file",
+    "explain", "tell", "me", "what", "is", "are", "how", "used",
 }
 NOISE_PATTERNS = [
     re.compile(pattern, re.IGNORECASE)
     for pattern in [
         r"\broll\s*no\b",
         r"\bteam\s+members?\b",
-        r"\bmembers?\b",
         r"\bcourse\b",
         r"\bbtech\b",
-        r"\byear\b",
         r"\bsubmitted\s+by\b",
         r"\bdepartment\b",
         r"\bstudent\b",
@@ -37,149 +35,203 @@ NOISE_PATTERNS = [
     ]
 ]
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+PAGE_PATTERN = re.compile(r"(?:^|\n)\[Page\s+(\d+)\]\s*\n", re.IGNORECASE)
+PAGE_QUERY_PATTERN = re.compile(r"\bpage\s+(\d+)\b", re.IGNORECASE)
 KEYWORD_EXPANSIONS = {
-    "workflow": {"workflow", "process", "pipeline", "steps", "architecture", "system", "flow"},
-    "architecture": {"architecture", "system", "modules", "components", "design", "flow"},
-    "summary": {"summary", "overview", "introduction", "abstract"},
+    "workflow": {"workflow", "process", "pipeline", "steps", "architecture", "flow"},
+    "tech": {"tech", "technology", "tools", "framework", "stack", "backend", "frontend", "database", "rfid", "api"},
+    "stack": {"stack", "technology", "tools", "framework", "backend", "frontend", "database", "rfid", "api"},
+    "evaluation": {"evaluation", "criteria", "assessment", "judging", "marks", "weightage"},
+    "criteria": {"criteria", "evaluation", "assessment", "judging", "marks", "weightage"},
 }
 
 
+def _extract_pages(document_text: str) -> list[dict[str, Any]]:
+    matches = list(PAGE_PATTERN.finditer(document_text))
+    if not matches:
+        cleaned = strip_page_markers(document_text)
+        return [{"page_number": 1, "text": cleaned}] if cleaned else []
+
+    pages: list[dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        page_number = int(match.group(1))
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(document_text)
+        page_text = document_text[start:end].strip()
+        cleaned = strip_page_markers(page_text)
+        if cleaned:
+            pages.append({"page_number": page_number, "text": cleaned})
+    return pages
+
+
 def _query_terms(query: str) -> set[str]:
-    tokens = {clean_token(token) for token in query.split() if clean_token(token)}
-    expanded = set(tokens)
-    for token in list(tokens):
+    raw_tokens = [clean_token(token) for token in re.findall(r"[A-Za-z0-9-]+", query)]
+    expanded = set(raw_tokens)
+    for token in list(raw_tokens):
         expanded.update(KEYWORD_EXPANSIONS.get(token, set()))
     return {token for token in expanded if token and token not in GENERIC_QUERY_TOKENS}
 
 
-def _split_sentences(text: str) -> list[str]:
-    normalized = text.replace("\n", " ")
-    return [part.strip() for part in SENTENCE_SPLIT.split(normalized) if len(part.split()) >= 5]
-
-
-def _is_noise_sentence(sentence: str) -> bool:
-    lowered = sentence.lower()
-    if sentence.count("(") >= 2 and any(char.isdigit() for char in sentence):
+def _is_noise_text(text: str) -> bool:
+    lowered = text.lower()
+    if not lowered.strip():
         return True
-    if lowered.startswith("[page"):
+    if any(pattern.search(text) for pattern in NOISE_PATTERNS):
         return True
-    return any(pattern.search(sentence) for pattern in NOISE_PATTERNS)
+    if text.count("(") >= 2 and any(char.isdigit() for char in text):
+        return True
+    return False
 
 
-def _score_line(query: str, line: str) -> float:
-    query_tokens = _query_terms(query)
-    line_tokens = {clean_token(token) for token in line.split() if clean_token(token)}
-    if not line_tokens:
-        return -5.0
-    overlap = len(query_tokens & line_tokens)
-    phrase_bonus = 2.5 if query.strip().lower() in line.lower() else 0.0
-    density_bonus = overlap / max(len(query_tokens), 1)
-    noise_penalty = 5.0 if _is_noise_sentence(line) else 0.0
-    short_penalty = 1.5 if len(line.split()) < 6 else 0.0
-    return overlap * 2.0 + density_bonus + phrase_bonus - noise_penalty - short_penalty
+def _split_units(text: str) -> list[str]:
+    cleaned_text = strip_page_markers(text)
+    units: list[str] = []
+    for line in cleaned_text.splitlines():
+        line = line.strip(" -\t")
+        if not line:
+            continue
+        sentence_parts = SENTENCE_SPLIT.split(line)
+        for part in sentence_parts:
+            candidate = part.strip(" -\t")
+            if len(candidate.split()) >= 4 and not _is_noise_text(candidate):
+                units.append(candidate)
+    return units
 
 
-def _candidate_sentences(query: str, context_chunks: list[dict[str, Any]]) -> list[str]:
-    candidates: list[tuple[float, str]] = []
-    seen: set[str] = set()
-    for chunk in context_chunks[: min(6, len(context_chunks))]:
-        for sentence in _split_sentences(chunk["text"]):
-            cleaned = sentence.strip()
-            if cleaned in seen:
-                continue
-            seen.add(cleaned)
-            score = _score_line(query, cleaned)
+def _unit_score(query: str, unit: str) -> float:
+    query_terms = _query_terms(query)
+    unit_terms = {clean_token(token) for token in re.findall(r"[A-Za-z0-9-]+", unit)}
+    if not query_terms or not unit_terms:
+        return 0.0
+
+    overlap = len(query_terms & unit_terms)
+    if overlap == 0:
+        return 0.0
+
+    exact_phrase_bonus = 2.5 if query.strip().lower() in unit.lower() else 0.0
+    definition_bonus = 1.5 if re.search(r"\b(?:is|refers to|defined as|means)\b", unit, re.IGNORECASE) else 0.0
+    heading_bonus = 1.0 if len(unit.split()) <= 10 and unit.istitle() else 0.0
+    return overlap * 2.2 + exact_phrase_bonus + definition_bonus + heading_bonus
+
+
+def _page_requested(query: str) -> int | None:
+    match = PAGE_QUERY_PATTERN.search(query)
+    return int(match.group(1)) if match else None
+
+
+def _best_units_from_pages(query: str, pages: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    requested_page = _page_requested(query)
+    page_pool = pages
+    if requested_page is not None:
+        page_pool = [page for page in pages if page["page_number"] == requested_page]
+        if not page_pool:
+            return []
+
+    scored_units: list[dict[str, Any]] = []
+    for page in page_pool:
+        for unit in _split_units(page["text"]):
+            score = _unit_score(query, unit)
             if score > 0:
-                candidates.append((score, cleaned))
-    ranked = [sentence for _, sentence in sorted(candidates, key=lambda item: item[0], reverse=True)]
-    if not ranked:
-        fallback: list[str] = []
-        for chunk in context_chunks[: min(4, len(context_chunks))]:
-            for sentence in _split_sentences(chunk["text"]):
-                if not _is_noise_sentence(sentence) and len(sentence.split()) >= 6:
-                    fallback.append(sentence)
-            if len(fallback) >= 4:
-                break
-        ranked = fallback
-    return ranked[:6]
+                scored_units.append({"text": unit, "page_number": page["page_number"], "score": score})
+
+    scored_units.sort(key=lambda item: item["score"], reverse=True)
+    if scored_units:
+        return scored_units[:limit]
+
+    if requested_page is not None:
+        fallback_units = _split_units(page_pool[0]["text"])
+        return [{"text": unit, "page_number": requested_page, "score": 0.5} for unit in fallback_units[:limit]]
+    return []
 
 
-def _filter_context_chunks(query: str, context_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    filtered: list[tuple[float, dict[str, Any]]] = []
-    for chunk in context_chunks:
-        sentences = _split_sentences(chunk["text"])
-        best_score = max((_score_line(query, sentence) for sentence in sentences), default=-5.0)
-        if best_score > 0:
-            filtered.append((best_score, chunk))
-    ranked_chunks = [chunk for _, chunk in sorted(filtered, key=lambda item: item[0], reverse=True)]
-    return ranked_chunks[:5] if ranked_chunks else context_chunks[:3]
+def _vectorstore_units(query: str, limit: int = 5) -> list[dict[str, Any]]:
+    chunks = retrieve_relevant_chunks_with_scores(query, k=4, score_threshold=4.0)
+    output: list[dict[str, Any]] = []
+    for chunk in chunks:
+        for unit in _split_units(str(chunk["text"])):
+            score = _unit_score(query, unit)
+            if score > 0:
+                output.append({"text": unit, "page_number": None, "score": score})
+    output.sort(key=lambda item: item["score"], reverse=True)
+    return output[:limit]
 
 
-def _lexical_answer(query: str, context_chunks: list[dict[str, Any]], answer_mode: str) -> str:
-    if not context_chunks:
-        return "I could not find enough evidence in the uploaded document."
-    evidence_lines = _candidate_sentences(query, context_chunks)
-    if not evidence_lines:
-        return "I could not find a clear answer for that exact question in the uploaded document. Try asking with a more specific module, workflow, or feature name."
-    if answer_mode == "short":
-        return " ".join(evidence_lines[:2])
+def _format_answer(units: list[dict[str, Any]], answer_mode: str) -> str:
+    unique_lines: list[str] = []
+    seen: set[str] = set()
+    for item in units:
+        text = strip_page_markers(item["text"]).strip()
+        if not text:
+            continue
+        normalized = text.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if not text.endswith((".", "!", "?")):
+            text += "."
+        unique_lines.append(text)
+
+    if not unique_lines:
+        return "I could not find a clear answer for that question in the uploaded document."
+
     if answer_mode == "step_by_step":
-        steps = [f"{index}. {excerpt}" for index, excerpt in enumerate(evidence_lines[:4], start=1)]
-        return "Here is the exact workflow or explanation from the document:\n" + "\n".join(steps)
-    if len(evidence_lines) == 1:
-        return evidence_lines[0]
-    return " ".join(evidence_lines[:3])
+        return "\n".join(f"{index}. {line}" for index, line in enumerate(unique_lines[:4], start=1))
+    if answer_mode == "short":
+        return " ".join(unique_lines[:2])
+    return " ".join(unique_lines[:3])
 
 
-def _follow_up_suggestions(question: str) -> list[str]:
+def _history_needed(question: str) -> bool:
     lowered = question.lower()
-    suggestions = ["Want a quick quiz on this topic?", "Want a concise summary of this section?"]
-    if any(token in lowered for token in ["difference", "compare", "versus", "vs"]):
-        suggestions.insert(0, "Want a comparison table for these concepts?")
-    if any(token in lowered for token in ["how", "process", "steps", "algorithm"]):
-        suggestions.insert(0, "Want this explained step by step?")
-    return suggestions[:3]
+    return any(token in lowered for token in {"this", "that", "it", "them", "these", "those", "continue", "previous"})
 
 
-def chatbot_respond(question: str, history: list[dict[str, str]] | None = None, *, answer_mode: str = "teacher") -> dict[str, Any]:
-    """Answer a question using retrieved context plus recent conversation memory."""
+def chatbot_respond(
+    question: str,
+    history: list[dict[str, str]] | None = None,
+    *,
+    answer_mode: str = "teacher",
+    document_text: str | None = None,
+) -> dict[str, Any]:
+    """Answer from the active uploaded document, using direct keyword search before fallback retrieval."""
     cleaned_question = question.strip()
     if not cleaned_question:
-        return {"answer": "Please enter a question about the uploaded document.", "confidence": 0.0, "sources": [], "suggested_followups": []}
+        return {"answer": "Please enter a question about the uploaded document.", "confidence": 0.0, "sources": []}
 
     history = history or []
-    context_chunks = retrieve_relevant_chunks_with_scores(cleaned_question, k=8, score_threshold=4.8)
-    context_chunks = _filter_context_chunks(cleaned_question, context_chunks)
-    if not context_chunks:
+    pages = _extract_pages(document_text or "")
+    best_units = _best_units_from_pages(cleaned_question, pages, limit=6) if pages else []
+    if not best_units:
+        best_units = _vectorstore_units(cleaned_question, limit=6)
+    if not best_units:
         return {
-            "answer": "I am not confident enough to answer from the uploaded document. Try asking about a specific concept or section.",
+            "answer": "I could not find a clear answer for that exact question in the uploaded document.",
             "confidence": 0.05,
             "sources": [],
-            "suggested_followups": _follow_up_suggestions(cleaned_question),
         }
 
-    avg_confidence = round(mean(item["confidence"] for item in context_chunks), 2)
-    filtered_sentences = _candidate_sentences(cleaned_question, context_chunks)
-    context = "\n".join(filtered_sentences[:8]) if filtered_sentences else "\n\n".join(item["text"] for item in context_chunks[:4])
-    recent_history = history[-12:]
-    history_text = "\n".join(f"{item['role'].upper()}: {item['content']}" for item in recent_history)
-    answer_instruction = ANSWER_MODE_INSTRUCTIONS.get(answer_mode, ANSWER_MODE_INSTRUCTIONS["teacher"])
+    avg_confidence = round(min(0.98, max(0.25, mean(item["score"] for item in best_units) / 8)), 2)
+    lexical_answer = _format_answer(best_units, answer_mode)
 
     if not llm_is_available():
-        answer = _lexical_answer(cleaned_question, context_chunks, answer_mode)
-        if avg_confidence < 0.2:
-            answer = "I am not fully confident, but this is the strongest evidence I found in the document:\n\n" + answer
-        return {"answer": answer, "confidence": avg_confidence, "sources": context_chunks, "suggested_followups": _follow_up_suggestions(cleaned_question)}
+        return {"answer": lexical_answer, "confidence": avg_confidence, "sources": best_units}
+
+    context = "\n".join(item["text"] for item in best_units[:4])
+    history_text = ""
+    if _history_needed(cleaned_question):
+        recent_history = history[-2:]
+        history_text = "\n".join(f"{item['role'].upper()}: {item['content']}" for item in recent_history)
 
     prompt = f"""
 You are a document-grounded tutor.
-Use the retrieved CONTEXT and the RECENT CONVERSATION HISTORY to answer the question.
-If confidence is low, say so clearly and avoid guessing.
-Answer style instruction: {answer_instruction}
-After the answer, add one short line called "Source Focus" describing which part of the retrieved material you relied on most.
+Use only the provided CONTEXT to answer the QUESTION.
+Do not mention page numbers.
+Do not mention unrelated sections, member names, roll numbers, or front matter.
+If the exact answer is not present, say that clearly instead of guessing.
+Answer style instruction: {ANSWER_MODE_INSTRUCTIONS.get(answer_mode, ANSWER_MODE_INSTRUCTIONS['teacher'])}
 
-RECENT CONVERSATION HISTORY:
-{history_text or 'No prior conversation.'}
+RECENT CONVERSATION:
+{history_text or 'No prior context needed.'}
 
 CONTEXT:
 {context}
@@ -187,11 +239,10 @@ CONTEXT:
 QUESTION:
 {cleaned_question}
 
-Answer only the question asked. Ignore title-page details, member names, roll numbers, and unrelated front matter unless the user explicitly asks for them.
-Use only the context provided. Do not guess or add extra information.
-Return a concise but helpful answer in 2 to 4 sentences.
+Return only a direct answer to the question in 2 to 4 sentences.
 """
-    answer = generate_llm_response(prompt, max_tokens=320, temperature=0.25)
-    if avg_confidence < 0.2:
-        answer = "Confidence is low for this answer. " + answer
-    return {"answer": answer, "confidence": avg_confidence, "sources": context_chunks, "suggested_followups": _follow_up_suggestions(cleaned_question)}
+    answer = generate_llm_response(prompt, max_tokens=220, temperature=0.15).strip()
+    answer = strip_page_markers(answer)
+    if not answer:
+        answer = lexical_answer
+    return {"answer": answer, "confidence": avg_confidence, "sources": best_units}

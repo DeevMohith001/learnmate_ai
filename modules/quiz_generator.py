@@ -8,7 +8,7 @@ from typing import Any
 
 from database.database_manager import get_cached_questions, get_user_performance_summary, store_quiz_questions
 from modules.llama_model import generate_llm_response, llm_is_available
-from modules.utils import chunk_text
+from modules.utils import chunk_text, strip_page_markers
 from modules.summarizer import extract_topics
 
 
@@ -17,8 +17,14 @@ STOP_WORDS = {"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "h
 
 
 def _split_sentences(content: str) -> list[str]:
-    parts = re.split(r"(?<=[.!?])\s+", content.strip())
+    parts = re.split(r"(?<=[.!?])\s+", strip_page_markers(content).strip())
     return [part.strip() for part in parts if len(part.split()) >= 8]
+
+
+def _sanitize_text(value: str) -> str:
+    cleaned = strip_page_markers(value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def _important_words(sentence: str) -> list[str]:
@@ -77,6 +83,7 @@ def _question_seed(content: str) -> int:
 
 
 def _fallback_question(sentence: str, question_type: str, rng: random.Random, keyword_pool: list[str], difficulty: str) -> dict[str, Any] | None:
+    sentence = _sanitize_text(sentence)
     keywords = _important_words(sentence)
     if not keywords:
         return None
@@ -92,36 +99,36 @@ def _fallback_question(sentence: str, question_type: str, rng: random.Random, ke
             statement = re.sub(rf"\b{re.escape(answer_word)}\b", distractors[0], sentence, count=1)
         return {
             "type": "true_false",
-            "question": statement,
+            "question": _sanitize_text(statement),
             "options": ["True", "False"],
             "answer": "True" if is_true else "False",
             "difficulty": difficulty,
             "skill_level": "intermediate" if difficulty == "medium" else difficulty,
-            "explanation": sentence,
+            "explanation": _sanitize_text(sentence),
             "quality_score": 0.72,
         }
 
     if question_type == "fill_blank":
         return {
             "type": "fill_blank",
-            "question": re.sub(rf"\b{re.escape(answer_word)}\b", "_____", sentence, count=1),
+            "question": _sanitize_text(re.sub(rf"\b{re.escape(answer_word)}\b", "_____", sentence, count=1)),
             "options": [],
-            "answer": answer_word,
+            "answer": _sanitize_text(answer_word),
             "difficulty": difficulty,
             "skill_level": "intermediate" if difficulty == "medium" else difficulty,
-            "explanation": sentence,
+            "explanation": _sanitize_text(sentence),
             "quality_score": 0.74,
         }
 
     if question_type == "short_answer":
         return {
             "type": "short_answer",
-            "question": f"Explain how '{answer_word}' is used in the document.",
+            "question": _sanitize_text(f"Explain how '{answer_word}' is used in the document."),
             "options": [],
-            "answer": concise_fact,
+            "answer": _sanitize_text(concise_fact),
             "difficulty": difficulty,
             "skill_level": "advanced" if difficulty == "hard" else "intermediate",
-            "explanation": concise_fact,
+            "explanation": _sanitize_text(concise_fact),
             "quality_score": 0.7,
         }
 
@@ -138,12 +145,12 @@ def _fallback_question(sentence: str, question_type: str, rng: random.Random, ke
     answer_index = options.index(correct_option)
     return {
         "type": "multiple_choice",
-        "question": f"What does the document state about {answer_word}?",
-        "options": options,
-        "answer": options[answer_index],
+        "question": _sanitize_text(f"What does the document state about {answer_word}?"),
+        "options": [_sanitize_text(option) for option in options],
+        "answer": _sanitize_text(options[answer_index]),
         "difficulty": difficulty,
         "skill_level": "intermediate" if difficulty == "medium" else difficulty,
-        "explanation": concise_fact,
+        "explanation": _sanitize_text(concise_fact),
         "quality_score": 0.78,
     }
 
@@ -188,11 +195,11 @@ def _validate_question(item: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
     question_type = item.get("type", "multiple_choice")
-    question = str(item.get("question", "")).strip()
-    answer = str(item.get("answer", "")).strip()
+    question = _sanitize_text(str(item.get("question", "")).strip())
+    answer = _sanitize_text(str(item.get("answer", "")).strip())
     if not question or not answer:
         return None
-    options = item.get("options", []) or []
+    options = [_sanitize_text(str(option)) for option in (item.get("options", []) or [])]
     if question_type in {"multiple_choice", "true_false"}:
         if question_type == "true_false":
             options = ["True", "False"]
@@ -209,13 +216,14 @@ def _validate_question(item: dict[str, Any]) -> dict[str, Any] | None:
         "answer": answer,
         "difficulty": item.get("difficulty", "medium"),
         "skill_level": item.get("skill_level", "intermediate"),
-        "explanation": str(item.get("explanation", "")).strip(),
+        "explanation": _sanitize_text(str(item.get("explanation", "")).strip()),
         "quality_score": float(item.get("quality_score", 0.75)),
     }
 
 
 def _llm_quiz(content: str, count: int, difficulty: str) -> list[dict[str, Any]]:
-    topics = extract_topics(content, limit=max(4, count))
+    cleaned_content = strip_page_markers(content)
+    topics = extract_topics(cleaned_content, limit=max(4, count))
     topic_text = ", ".join(topics[: min(len(topics), count)]) or "the most important concepts"
     prompt = f"""
 You are an AI instructor creating a quiz from study material.
@@ -245,7 +253,7 @@ JSON format:
 ]
 
 CONTENT:
-{content}
+{cleaned_content}
 """
     raw = generate_llm_response(prompt, max_tokens=2200, temperature=0.45)
     cleaned = _strip_fences(raw)
@@ -272,6 +280,7 @@ def generate_quiz_package(
     difficulty_override: str | None = None,
     config=None,
 ) -> dict[str, Any]:
+    content = strip_page_markers(content)
     difficulty = difficulty_override or _infer_difficulty(user_id, config)
     extracted_topics = extract_topics(content, limit=max(4, count))
     cache_topic = topic if topic != "general_document" else (extracted_topics[0] if extracted_topics else topic)

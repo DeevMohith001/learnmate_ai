@@ -48,6 +48,7 @@ from database.database_manager import (
 )
 from learnmate_ai.config import get_config
 from learnmate_ai.storage import ensure_data_directories, save_uploaded_file
+from modules.utils import strip_page_markers
 
 
 DOC_PATH = "data/latest_doc.txt"
@@ -393,29 +394,45 @@ def render_chatbot_sidebar(config) -> None:
     if not user_id:
         return
 
+    session_id = ensure_chat_session(config)
     sessions = list_chat_sessions(user_id, config)
+    current_doc_id = current_document_id()
+    if current_doc_id:
+        filtered_sessions = [session for session in sessions if session.get("document_id") == current_doc_id]
+        sessions = filtered_sessions or sessions
+
     if st.sidebar.button("New Chat Session"):
         st.session_state.chat_session_id = None
-        ensure_chat_session(config)
+        session_id = ensure_chat_session(config)
+        sessions = list_chat_sessions(user_id, config)
+        if current_doc_id:
+            filtered_sessions = [session for session in sessions if session.get("document_id") == current_doc_id]
+            sessions = filtered_sessions or sessions
         st.rerun()
 
     if sessions:
-        labels = {f"{session['title']} ({session['updated_at'][:16]})": int(session["id"]) for session in sessions}
-        selected_label = st.sidebar.selectbox("Conversation", list(labels.keys()))
-        st.session_state.chat_session_id = labels[selected_label]
+        labels = [f"{session['title']} ({session['updated_at'][:16]})" for session in sessions]
+        ids = [int(session["id"]) for session in sessions]
+        default_index = ids.index(session_id) if session_id in ids else 0
+        selected_label = st.sidebar.selectbox("Conversation", labels, index=default_index)
+        st.session_state.chat_session_id = ids[labels.index(selected_label)]
+        session_id = st.session_state.chat_session_id
 
-    session_id = ensure_chat_session(config)
     history_rows = list_chat_messages(session_id, config, limit=40) if session_id else []
     history = [{"role": row["role"], "content": row["message_text"]} for row in history_rows]
+    doc_text = load_document_text() or ""
 
     chat_mode_label = st.sidebar.selectbox("Answer style", list(CHAT_ANSWER_MODES.keys()), index=0)
     question = st.sidebar.text_area("Ask about the uploaded document", key="sidebar_chat_input")
     if st.sidebar.button("Send Chat Question"):
-        response = chatbot_rag.chatbot_respond(question, history=history, answer_mode=CHAT_ANSWER_MODES[chat_mode_label])
+        response = chatbot_rag.chatbot_respond(
+            question,
+            history=history,
+            answer_mode=CHAT_ANSWER_MODES[chat_mode_label],
+            document_text=doc_text,
+        )
         if question.strip() and session_id is not None:
             answer_text = response["answer"]
-            if response.get("suggested_followups"):
-                answer_text += "\n\nSuggested follow-ups:\n" + "\n".join(f"- {item}" for item in response["suggested_followups"])
             add_chat_message(session_id, user_id, "user", question, config=config)
             assistant_message_id = add_chat_message(
                 session_id,
@@ -443,14 +460,10 @@ def render_chatbot_sidebar(config) -> None:
 
     if history_rows:
         st.sidebar.markdown("### Conversation")
-        for row in history_rows[-12:]:
+        recent_rows = list(reversed(history_rows[-12:]))
+        for row in recent_rows:
             label = "You" if row["role"] == "user" else f"Bot ({row.get('confidence_score') or 0:.2f})"
             st.sidebar.markdown(f"**{label}:** {row['message_text']}")
-            metadata = row.get("retrieval_metadata") or {}
-            sources = metadata.get("sources", [])
-            if row["role"] == "assistant" and sources:
-                preview = sources[0]["text"][:220].replace("\n", " ")
-                st.sidebar.caption(f"Source: {preview}...")
 
     if st.session_state.last_assistant_message_id:
         rating = st.sidebar.radio("Rate latest bot answer", [1, 2, 3, 4, 5], horizontal=True, key="chat_rating")
@@ -539,19 +552,16 @@ def render_summarizer_page(config) -> None:
     if result:
         if result.get("cached"):
             st.caption("Loaded from summary cache.")
-        hierarchy = result.get("hierarchy", {})
-        page_count = hierarchy.get("page_count")
-        if page_count:
-            st.caption(f"Pages covered: {page_count}")
         st.markdown("### Summary")
-        st.markdown(result["summary_text"])
+        st.markdown(strip_page_markers(result["summary_text"]))
 
 
 def _render_question(index: int, question_data: dict[str, Any]):
     qtype = question_data.get("type", "multiple_choice")
-    prompt = f"Q{index + 1}: {question_data['question']}"
+    prompt = f"Q{index + 1}: {strip_page_markers(str(question_data['question']))}"
     if qtype in {"multiple_choice", "true_false"}:
-        return st.radio(prompt, question_data.get("options", []), index=None, key=f"q_{index}")
+        options = [strip_page_markers(str(option)) for option in question_data.get("options", [])]
+        return st.radio(prompt, options, index=None, key=f"q_{index}")
     if qtype == "fill_blank":
         return st.text_input(prompt, key=f"q_{index}")
     return st.text_area(prompt, key=f"q_{index}")
@@ -601,7 +611,7 @@ def render_quiz_page(config) -> None:
 
     questions = package["questions"]
     if package.get("topics"):
-        st.caption("Quiz coverage: " + ", ".join(package["topics"][:6]))
+        st.caption("Quiz coverage: " + ", ".join(strip_page_markers(str(topic)) for topic in package["topics"][:6]))
     with st.form("quiz_attempt_form"):
         answers: list[str | None] = []
         for idx, question_data in enumerate(questions):
@@ -646,7 +656,7 @@ def render_quiz_page(config) -> None:
         for index, question in enumerate(questions):
             explanation = question.get("explanation")
             if explanation:
-                st.caption(f"Q{index + 1} explanation: {explanation}")
+                st.caption(f"Q{index + 1} explanation: {strip_page_markers(str(explanation))}")
 
 
 def render_analytics_page(config) -> None:

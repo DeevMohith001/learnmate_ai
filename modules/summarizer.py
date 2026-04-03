@@ -90,17 +90,46 @@ def _page_lines(page_text: str, count: int) -> list[str]:
     return merged
 
 
+def _page_topic_label(page_text: str, fallback_number: int, used_labels: set[str]) -> str:
+    topics = extract_topics(page_text, limit=3)
+    for topic in topics:
+        cleaned = topic.strip()
+        if not cleaned:
+            continue
+        label = cleaned[:1].upper() + cleaned[1:]
+        normalized = label.lower()
+        if normalized not in used_labels:
+            used_labels.add(normalized)
+            return label
+
+    lines = [line.strip(" -•\t") for line in page_text.splitlines() if line.strip()]
+    for line in lines[:6]:
+        words = line.split()
+        if 2 <= len(words) <= 8:
+            label = re.sub(r"\s+", " ", line).strip(" :.-")
+            normalized = label.lower()
+            if label and normalized not in used_labels:
+                used_labels.add(normalized)
+                return label
+
+    fallback_label = f"Topic {fallback_number}"
+    used_labels.add(fallback_label.lower())
+    return fallback_label
+
+
 def _pagewise_summary(content: str, detail_level: str) -> tuple[str, dict[str, Any]]:
     relevant_pages = _select_relevant_pages(content)
     line_count = 2 if detail_level == "brief" else 5
     rendered_pages: list[dict[str, Any]] = []
     blocks: list[str] = []
+    used_labels: set[str] = set()
     for page in relevant_pages:
         lines = _page_lines(page["text"], line_count)
         if not lines:
             continue
-        rendered_pages.append({"page": page["page_number"], "summary": lines})
-        blocks.append(f"### Page {page['page_number']}\n" + "\n".join(f"- {line}" for line in lines))
+        topic_label = _page_topic_label(page["text"], page["page_number"], used_labels)
+        rendered_pages.append({"topic": topic_label, "page": page["page_number"], "summary": lines})
+        blocks.append(f"### {topic_label}\n" + "\n".join(f"- {line}" for line in lines))
     return "\n\n".join(blocks), {"page_summaries": rendered_pages, "page_count": len(rendered_pages)}
 
 

@@ -65,38 +65,38 @@ def inject_theme() -> None:
         """
         <style>
         .stApp {
-            background: linear-gradient(180deg, #f7fbff 0%, #eef7f1 100%);
-            color: #1f2937;
+            background: linear-gradient(180deg, #0f1720 0%, #16212d 48%, #1a2633 100%);
+            color: #e5eef7;
         }
         .stApp, .stApp p, .stApp li, .stApp span, .stApp label, .stApp div {
-            color: #0f172a;
+            color: #dbe7f3;
         }
         [data-testid="stHeader"] {
-            background: #f8fbff;
+            background: rgba(15, 23, 32, 0.88);
         }
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #ffffff 0%, #f3fbf6 100%);
-            border-right: 1px solid rgba(15, 23, 42, 0.08);
+            background: linear-gradient(180deg, #111b25 0%, #172330 100%);
+            border-right: 1px solid rgba(148, 163, 184, 0.18);
         }
         [data-testid="stSidebar"] * {
-            color: #0f172a !important;
+            color: #e2edf8 !important;
         }
         .stButton > button, .stDownloadButton > button {
-            background: linear-gradient(135deg, #0f766e 0%, #38bdf8 100%);
+            background: linear-gradient(135deg, #1d8f87 0%, #5aa6d6 100%);
             color: #ffffff !important;
             border: none;
             border-radius: 12px;
-            box-shadow: 0 8px 20px rgba(14, 116, 144, 0.18);
+            box-shadow: 0 10px 24px rgba(7, 17, 27, 0.32);
         }
         .stButton > button *, .stDownloadButton > button * {
             color: #ffffff !important;
             fill: #ffffff !important;
         }
         .stButton > button:hover, .stDownloadButton > button:hover {
-            filter: brightness(1.04);
+            filter: brightness(1.06);
         }
         .stSelectbox label, .stRadio label, .stTextArea label, .stTextInput label, .stSlider label, .stFileUploader label {
-            color: #0f172a !important;
+            color: #e7f0f8 !important;
             font-weight: 600;
         }
         .stSelectbox div[data-baseweb="select"] > div,
@@ -104,13 +104,13 @@ def inject_theme() -> None:
         .stTextInput input,
         .stTextArea textarea,
         .stNumberInput input {
-            background: #ffffff !important;
-            color: #0f172a !important;
-            border: 1px solid #cbd5e1 !important;
+            background: #1f2d3a !important;
+            color: #eef6ff !important;
+            border: 1px solid #4c6378 !important;
         }
         .stTextArea textarea::placeholder,
         .stTextInput input::placeholder {
-            color: #64748b !important;
+            color: #9db2c5 !important;
         }
         div[role="radiogroup"] label,
         div[data-testid="stRadio"] label,
@@ -118,78 +118,78 @@ def inject_theme() -> None:
         div[data-testid="stFileUploader"] small,
         div[data-testid="stFileUploader"] span,
         div[data-testid="stFileUploader"] p {
-            color: #0f172a !important;
+            color: #dbe7f3 !important;
             opacity: 1 !important;
         }
         div[data-testid="stRadio"] p {
-            color: #0f172a !important;
+            color: #dbe7f3 !important;
         }
         div[data-testid="stFileUploader"] section {
-            background: #f8fafc !important;
-            border: 1px solid #cbd5e1 !important;
+            background: #16222e !important;
+            border: 1px solid #41566a !important;
             border-radius: 14px !important;
         }
         div[data-testid="stFileUploaderDropzone"] {
-            background: #f8fafc !important;
-            border: 1px solid #cbd5e1 !important;
+            background: #16222e !important;
+            border: 1px solid #41566a !important;
         }
         div[data-testid="stFileUploaderDropzone"] * {
-            color: #0f172a !important;
-            fill: #0f172a !important;
+            color: #e2edf8 !important;
+            fill: #e2edf8 !important;
             opacity: 1 !important;
         }
         div[data-testid="stFileUploaderDropzoneInstructions"] span,
         div[data-testid="stFileUploaderDropzoneInstructions"] small,
         div[data-testid="stFileUploaderDropzoneInstructions"] p {
-            color: #0f172a !important;
+            color: #e2edf8 !important;
         }
         div[data-testid="stBaseButton-secondary"],
         button[kind="secondary"],
         button[data-testid="stBaseButton-secondary"] {
-            background: #ffffff !important;
-            color: #0f172a !important;
-            border: 1px solid #94a3b8 !important;
+            background: #1c2a38 !important;
+            color: #eef6ff !important;
+            border: 1px solid #5e768b !important;
         }
         div[data-testid="stBaseButton-secondary"] *,
         button[kind="secondary"] *,
         button[data-testid="stBaseButton-secondary"] * {
-            color: #0f172a !important;
-            fill: #0f172a !important;
+            color: #eef6ff !important;
+            fill: #eef6ff !important;
         }
         div[data-testid="stMarkdownContainer"] p,
         div[data-testid="stMarkdownContainer"] li,
         div[data-testid="stMarkdownContainer"] span {
-            color: #0f172a !important;
+            color: #dbe7f3 !important;
         }
         [data-testid="stSidebarNav"] {
-            color: #0f172a !important;
+            color: #e2edf8 !important;
         }
         .stSuccess, .stInfo, .stWarning, .stError {
-            color: #0f172a !important;
+            color: #edf6ff !important;
         }
         .stSuccess {
-            background: #dcfce7 !important;
+            background: rgba(34, 197, 94, 0.18) !important;
         }
         .stInfo {
-            background: #dbeafe !important;
+            background: rgba(96, 165, 250, 0.16) !important;
         }
         .stWarning {
-            background: #fef3c7 !important;
+            background: rgba(245, 158, 11, 0.18) !important;
         }
         .stError {
-            background: #fee2e2 !important;
+            background: rgba(239, 68, 68, 0.18) !important;
         }
         .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {
-            color: #0f172a;
+            color: #f4f8fc;
         }
         div[data-testid="stMetric"] {
-            background: rgba(255, 255, 255, 0.72);
-            border: 1px solid rgba(15, 23, 42, 0.08);
+            background: rgba(24, 36, 48, 0.86);
+            border: 1px solid rgba(122, 160, 192, 0.18);
             border-radius: 16px;
             padding: 10px 14px;
         }
         div[data-testid="stDataFrame"] {
-            background: rgba(255, 255, 255, 0.74);
+            background: rgba(20, 31, 42, 0.84);
             border-radius: 14px;
             padding: 4px;
         }
@@ -198,13 +198,19 @@ def inject_theme() -> None:
             padding-bottom: 2rem;
         }
         section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
-            background: rgba(255, 255, 255, 0.7);
+            background: rgba(30, 45, 60, 0.85);
             border-radius: 10px;
             padding: 4px 8px;
             margin-bottom: 2px;
         }
         section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-            background: #ffffff !important;
+            background: #1c2a38 !important;
+        }
+        div[data-baseweb="select"] svg, .stSelectbox svg {
+            fill: #dbe7f3 !important;
+        }
+        hr {
+            border-color: rgba(148, 163, 184, 0.18);
         }
         </style>
         """,
@@ -421,42 +427,55 @@ def render_chatbot_sidebar(config) -> None:
     history_rows = list_chat_messages(session_id, config, limit=40) if session_id else []
     history = [{"role": row["role"], "content": row["message_text"]} for row in history_rows]
     doc_text = load_document_text() or ""
+    if (not doc_text.strip()) and current_document_id():
+        document_row = get_document(current_document_id(), config)
+        if document_row:
+            doc_text = str(document_row.get("text_content") or "")
 
     chat_mode_label = st.sidebar.selectbox("Answer style", list(CHAT_ANSWER_MODES.keys()), index=0)
     question = st.sidebar.text_area("Ask about the uploaded document", key="sidebar_chat_input")
     if st.sidebar.button("Send Chat Question"):
-        response = chatbot_rag.chatbot_respond(
-            question,
-            history=history,
-            answer_mode=CHAT_ANSWER_MODES[chat_mode_label],
-            document_text=doc_text,
-        )
-        if question.strip() and session_id is not None:
-            answer_text = response["answer"]
-            add_chat_message(session_id, user_id, "user", question, config=config)
-            assistant_message_id = add_chat_message(
-                session_id,
-                user_id,
-                "assistant",
-                answer_text,
-                config=config,
-                confidence_score=response["confidence"],
-                retrieval_metadata={"sources": response["sources"]},
-            )
-            st.session_state.last_assistant_message_id = assistant_message_id
-            log_chat_event(user_id, current_document_topic(), question, answer_text, config=config)
-            log_event(
-                user_id,
-                "chat_message",
-                {"question": question, "confidence": response["confidence"]},
-                config=config,
-                activity_type="chat_interaction",
-                resource_id=str(session_id),
-                metadata={"topics": [current_document_topic()], "confidence": response["confidence"]},
-                topics=[current_document_topic()],
-                session_id=str(session_id),
-            )
-            st.rerun()
+        if not question.strip():
+            st.sidebar.warning("Enter a question first.")
+        elif not doc_text.strip():
+            st.sidebar.warning("Upload a PDF or TXT document first so the chatbot has content to answer from.")
+        elif session_id is None:
+            st.sidebar.error("Could not start a chat session for this document.")
+        else:
+            try:
+                response = chatbot_rag.chatbot_respond(
+                    question,
+                    history=history,
+                    answer_mode=CHAT_ANSWER_MODES[chat_mode_label],
+                    document_text=doc_text,
+                )
+                answer_text = response["answer"]
+                add_chat_message(session_id, user_id, "user", question, config=config)
+                assistant_message_id = add_chat_message(
+                    session_id,
+                    user_id,
+                    "assistant",
+                    answer_text,
+                    config=config,
+                    confidence_score=response["confidence"],
+                    retrieval_metadata={"sources": response["sources"]},
+                )
+                st.session_state.last_assistant_message_id = assistant_message_id
+                log_chat_event(user_id, current_document_topic(), question, answer_text, config=config)
+                log_event(
+                    user_id,
+                    "chat_message",
+                    {"question": question, "confidence": response["confidence"]},
+                    config=config,
+                    activity_type="chat_interaction",
+                    resource_id=str(session_id),
+                    metadata={"topics": [current_document_topic()], "confidence": response["confidence"]},
+                    topics=[current_document_topic()],
+                    session_id=str(session_id),
+                )
+                st.rerun()
+            except Exception as exc:
+                st.sidebar.error(f"Chatbot failed: {exc}")
 
     if history_rows:
         st.sidebar.markdown("### Conversation")

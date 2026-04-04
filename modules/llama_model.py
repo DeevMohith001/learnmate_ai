@@ -18,7 +18,16 @@ _llm_lock = Lock()
 
 
 def get_model_path() -> Path:
-    return Path(get_config().model_path)
+    configured = Path(get_config().model_path)
+    if configured.exists():
+        return configured
+
+    models_dir = configured.parent
+    if models_dir.exists():
+        candidates = sorted(models_dir.glob("*.gguf"))
+        if candidates:
+            return candidates[0]
+    return configured
 
 
 def load_llm():
